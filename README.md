@@ -37,13 +37,42 @@ bevor der Collector mit diesem Branch verwendet werden kann.
 
 Every three seconds the collector asks the read-only deadlock-rs library for a snapshot of the running game. It checks that you are playing, identifies your hero and team, and sums the players’ net worth for each side. It skips spectator sessions and incomplete scoreboards. [Collector source](src/main.rs) · [Pinned reader source](https://github.com/deadlock-plus/deadlock-rs/tree/8b408b9103a022e7bac620bfa4916778b8fdfaa1)
 
-The collector sends one HTTPS POST to `https://deutsche-deadlock-community.de/twitch/api/v2/live-match` for each usable snapshot. This example shows the entire JSON body.
+The collector sends one HTTPS POST to `https://deutsche-deadlock-community.de/twitch/api/v2/live-match` for each usable snapshot. This example shows the **legacy summary fields**. On this development branch the payload also includes a bounded `details` object (described below); the exact contents depend on the reader's observed fields.
 
 ```json
 {"match_id":"123","hero":"Infernus","game_seconds":42,"kills":2,"deaths":3,"assists":4,"team_souls":500,"enemy_souls":600,"game_mode":"normal","paused":false,"midboss":{"present":false,"next_spawn_in_seconds":90,"source":"game"}}
 ```
 
 The optional `paused` and `midboss` properties are sent only when the pinned reader actually supplies them; the JSON above is an example, not a live measurement. If the game marks the match `dont_upload_stats` or the reader reports schema drift, the collector skips the snapshot.
+
+### Erweiterbarer Deadlock-Datensatz (Entwicklung)
+
+Der Collector baut aus dem vorhandenen, gepinnten Deadlock-Reader den
+**versionierten `details.schema_version=1`-Datensatz**. Er besteht aus
+`scoreboard` (bis 12 Spieler, nur spielstandbezogene Werte), `teams`,
+`own_loadout` (nur eigener Held: Items, Ability-Upgrades, Souls, Level),
+`structures` (sichtbare Gebäude-Zustände, ohne Koordinaten) und
+`objectives` (Midboss, Urne, Rift, Bridge Buffs). `capabilities`
+nennt die unterstützten Bereiche. Bei unbekannten Werten wird `null`
+gesendet; die Timer-Quellen `game`, `schedule` und `unknown`
+sind getrennt. Nur `game` ist ein direkt vom Client stammender Timer,
+eine `schedule`-Zeit ist ausdrücklich eine Schätzung.
+
+**Privacy/Fair-Play:** Kein pauschales Serialisieren des ganzen
+`LiveSnapshot`, keine Steam-IDs, Spielernamen, Prozessadressen,
+Positionen, gegnerischen Ult-Cooldowns oder nicht sichtbar begründbaren
+gegnerischen Detailstatistiken. Details stehen **nur dem authentifizierten
+Streamer** am Server-Endpunkt
+`GET /twitch/api/v2/streamer/live-match-details?sections=scoreboard,teams`
+zur Verfügung; andere zulässige Sektionen sind `own_loadout`,
+`structures` und `objectives`. Die öffentliche OBS-API erhält
+nur die bestehende reduzierte Projektion. Es wird **kein Brain** benötigt.
+
+Es können nicht „alle“ Deadlock-Interna verlässlich geliefert werden.
+Das Erweiterungsmodell ermöglicht aber neue ausdrücklich erlaubte
+Datenfelder ohne eine zweite Windows-App. Jede neue Kategorie benötigt
+eine definierte Erkennung, nachweisbare Quelle, Schema-Version und
+Tests; keine fremden versteckten Spielinformationen.
 
 The channel key travels in the Authorization header. The interactive prompt hides it as you type, and the collector keeps it in memory until you close the program. The service uses these values for your public overlay. Press Ctrl+C to stop sending updates. Generate a new key in the builder to invalidate the previous one.
 

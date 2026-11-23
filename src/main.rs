@@ -1,3 +1,5 @@
+mod telemetry;
+
 use std::io::{self, IsTerminal};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -38,6 +40,8 @@ struct Payload {
     paused: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     midboss: Option<MidbossTelemetry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<telemetry::MatchDetails>,
 }
 
 fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
@@ -109,6 +113,11 @@ fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
                 source: "game",
             })
         });
+    let game_mode = match s.game_mode {
+        Some(GameMode::Normal) => Some("normal"),
+        Some(GameMode::StreetBrawl) => Some("street_brawl"),
+        _ => None,
+    };
     Some(Payload {
         match_id: id.to_string(),
         hero,
@@ -118,9 +127,10 @@ fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
         assists: player.assists?,
         team_souls: own?,
         enemy_souls: enemy?,
-        game_mode: (s.game_mode == Some(GameMode::Normal)).then_some("normal"),
+        game_mode,
         paused: s.paused,
         midboss,
+        details: game_mode.and_then(|_| telemetry::collect(s, player)),
     })
 }
 
@@ -225,7 +235,7 @@ fn main() {
 mod tests {
     use super::*;
     use deadlock_core::{HeroId, Team};
-    use deadlock_reader::snapshot::{GameState, MatchClock, PlayerRow};
+    use deadlock_reader::snapshot::{GameState, MatchClock, PlayerRow, TeamStats};
     use deadlock_reader::timers::ObjectiveTimer;
 
     fn snapshot() -> LiveSnapshot {
@@ -265,10 +275,64 @@ mod tests {
     #[test]
     fn emits_flat_local_payload() {
         let data = payload(&snapshot(), &HeroCatalog::bundled()).unwrap();
-        assert_eq!(
-            serde_json::to_value(data).unwrap(),
-            serde_json::json!({"match_id":"123", "hero":"Infernus", "game_seconds":42, "kills":2, "deaths":3, "assists":4, "team_souls":500, "enemy_souls":600, "game_mode":"normal"})
-        );
+        let actual = serde_json::to_value(data).unwrap();
+        for (key, value) in serde_json::json!({
+            "match_id":"123", "hero":"Infernus", "game_seconds":42,
+            "kills":2, "deaths":3, "assists":4,
+            "team_souls":500, "enemy_souls":600, "game_mode":"normal"
+        })
+        .as_object()
+        .unwrap()
+        {
+            assert_eq!(&actual[key], value, "field {key}");
+        }
+        assert_eq!(actual["details"]["schema_version"], 1);
+        assert_eq!(actual["details"]["scoreboard"].as_array().unwrap().len(), 2);
+        assert!(actual["details"]["own_loadout"].is_object());
+        assert!(actual["details"]["objectives"].is_object());
+        let serialized = actual.to_string();
+        for hidden in [
+            "steam_id",
+            "controller",
+            "pawn_handle",
+            "position",
+            "ultimate_cooldown",
+            "raw_match_clock",
+            "modifiers",
+        ] {
+            assert!(!serialized.contains(hidden), "leak: {hidden}");
+        }
+    }
+
+    #[test]
+    fn rich_snapshot_contains_only_safe_cross_player_values() {
+        let heroes = HeroCatalog::bundled();
+        let mut s = snapshot();
+        s.players[0].hero_damage = Some(100);
+        s.players[0].items = Some(vec![1234, 5678]);
+        s.players[1].hero_damage = Some(999);
+        s.players[1].last_hits = Some(300);
+        s.teams = vec![
+            TeamStats {
+                team: Team::AMBER,
+                players: 1,
+                hero_damage: 100,
+                ..Default::default()
+            },
+            TeamStats {
+                team: Team::SAPPHIRE,
+                players: 1,
+                hero_damage: 999,
+                ..Default::default()
+            },
+        ];
+        let body = serde_json::to_value(payload(&s, &heroes).unwrap()).unwrap();
+        assert_eq!(body["details"]["scoreboard"][0]["hero_damage"], 100);
+        assert!(body["details"]["scoreboard"][1]["hero_damage"].is_null());
+        assert!(body["details"]["scoreboard"][1]["last_hits"].is_null());
+        assert_eq!(body["details"]["own_loadout"]["items"][0], 1234);
+        assert_eq!(body["details"]["teams"][0]["hero_damage"], 100);
+        assert!(body["details"]["teams"][1]["hero_damage"].is_null());
     }
 
     #[test]
@@ -357,6 +421,25 @@ mod tests {
         }
         s.dont_upload_stats = Some(true);
         assert!(payload(&s, &heroes).is_none());
+    }
+
+    #[test]
+    fn street_brawl_does_not_expose_normal_mode_objectives() {
+        let heroes = HeroCatalog::bundled();
+        let mut s = snapshot();
+        s.game_mode = Some(GameMode::StreetBrawl);
+        s.timers.midboss = Some(ObjectiveTimer {
+            present: Some(false),
+            count: Some(0),
+            next_spawn_in: Some(10.0),
+            source: TimerSource::Game,
+        });
+        let actual = payload(&s, &heroes).unwrap();
+        assert_eq!(actual.game_mode, Some("street_brawl"));
+        assert_eq!(actual.midboss, None);
+        let details = actual.details.unwrap();
+        assert!(details.objectives.midboss.is_none());
+        assert_eq!(details.scoreboard.len(), 2);
     }
 
     #[test]

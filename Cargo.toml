@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 deadlock-reader = { git = "https://github.com/deadlock-plus/deadlock-rs", rev = "8b408b9103a022e7bac620bfa4916778b8fdfaa1" }
 deadlock-data = { git = "https://github.com/deadlock-plus/deadlock-rs", rev = "8b408b9103a022e7bac620bfa4916778b8fdfaa1", default-features = false, features = ["bundled"] }
+deadlock-core = { git = "https://github.com/deadlock-plus/deadlock-rs", rev = "8b408b9103a022e7bac620bfa4916778b8fdfaa1" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
