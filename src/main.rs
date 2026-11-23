@@ -111,7 +111,6 @@ fn main() {
     };
     let client = match Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(2))
         .https_only(true)
         .build()
     {
@@ -139,7 +138,17 @@ fn main() {
             Some(Ok(snapshot)) => {
                 supervisor.succeeded();
                 if let Some(data) = snapshot.as_ref().and_then(|s| payload(s, &heroes)) {
-                    let error = match client.post(ENDPOINT).bearer_auth(&token).json(&data).send() {
+                    let budget = PERIOD.saturating_sub(started.elapsed());
+                    if budget.is_zero() {
+                        continue;
+                    }
+                    let error = match client
+                        .post(ENDPOINT)
+                        .timeout(budget)
+                        .bearer_auth(&token)
+                        .json(&data)
+                        .send()
+                    {
                         Ok(response) if response.status().is_success() => None,
                         Ok(response) if response.status().as_u16() == 401 || response.status().as_u16() == 403 => {
                             eprintln!("Token abgelehnt. Bitte ein aktuelles Token erstellen oder erneut eingeben und das Programm neu starten.");
