@@ -26,8 +26,18 @@ Einrichtung
 
 Während du selbst spielst, sendet der Collector die Match-ID, deinen Helden,
 die Spielzeit, deine Kills, Tode und Assists und die Seelen beider Teams
-an den Twitch-Bot der Deutschen Deadlock Community. Wer deine öffentliche
-Overlay-URL kennt, kann die aktuellen Werte sehen.
+an den Twitch-Bot der Deutschen Deadlock Community. Die neue Version
+überträgt außerdem den Pausenstatus und – nur wenn das Spiel sie wirklich
+meldet – den Mid-Boss-Zustand und seine nächste Spawnzeit.
+Andere Jungle-Camp-, Urnen- oder Rift-Zeiten werden NICHT geraten.
+Wer deine öffentliche Overlay-URL kennt, kann die aktuellen Werte sehen.
+OBS-Quelle: /twitch/objective-overlay?streamer=DEIN_KANALNAME
+
+Der Verbindungsschlüssel ist ausschließlich für das Windows-Programm.
+Er darf nicht in einer OBS-URL stehen. Erstelle oder erneuere ihn im
+Overlay-Baukasten; beim Erneuern wird der bisherige Schlüssel ungültig.
+Die erweiterte Übertragung funktioniert erst, wenn der Server die
+neue API und Datenbankmigration bereitstellt.
 
 Wenn die Verbindung abreißt, blendet das Overlay die Live-Karte nach kurzer
 Zeit aus. Erstellst du einen neuen Schlüssel, verliert der alte seine Gültigkeit.

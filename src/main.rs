@@ -3,14 +3,24 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use deadlock_data::HeroCatalog;
-use deadlock_reader::snapshot::{Context, LiveSnapshot, Perspective};
+use deadlock_reader::snapshot::{Context, GameMode, LiveSnapshot, Perspective};
 use deadlock_reader::supervise::{Attached, ReaderSupervisor};
+use deadlock_reader::timers::TimerSource;
 use deadlock_reader::HeroNames;
 use reqwest::blocking::Client;
 use serde::Serialize;
 
 const ENDPOINT: &str = "https://deutsche-deadlock-community.de/twitch/api/v2/live-match";
 const PERIOD: Duration = Duration::from_secs(3);
+
+#[derive(Debug, Serialize, PartialEq)]
+struct MidbossTelemetry {
+    /// Nur wenn der Client den Wert direkt meldet, niemals geschaetzte Respawns.
+    present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_spawn_in_seconds: Option<u32>,
+    source: &'static str,
+}
 
 #[derive(Debug, Serialize, PartialEq)]
 struct Payload {
@@ -22,12 +32,20 @@ struct Payload {
     assists: u32,
     team_souls: u32,
     enemy_souls: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    midboss: Option<MidbossTelemetry>,
 }
 
 fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
     if s.context != Context::Match
         || s.perspective != Perspective::Playing
         || !s.game_state?.is_live()
+        || !s.drift.is_empty()
+        || s.dont_upload_stats == Some(true)
     {
         return None;
     }
@@ -67,6 +85,30 @@ fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
     if !seconds.is_finite() || seconds < 0.0 || seconds >= (u32::MAX as f32) {
         return None;
     }
+    // Keine geschaetzten Routen, gegnerischen Positionen oder Cooldowns.
+    // Nur der direkt uebertragene Midboss-Timer darf als verifiziert gelten.
+    let midboss = (s.game_mode == Some(GameMode::Normal))
+        .then_some(())
+        .and_then(|_| s.timers.midboss.as_ref())
+        .and_then(|timer| {
+            if timer.source != TimerSource::Game {
+                return None;
+            }
+            let present = timer.present?;
+            let next_spawn_in_seconds = if present {
+                None
+            } else {
+                timer
+                    .next_spawn_in
+                    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0 && *seconds <= 7200.0)
+                    .map(|seconds| seconds.ceil() as u32)
+            };
+            Some(MidbossTelemetry {
+                present,
+                next_spawn_in_seconds,
+                source: "game",
+            })
+        });
     Some(Payload {
         match_id: id.to_string(),
         hero,
@@ -76,6 +118,9 @@ fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
         assists: player.assists?,
         team_souls: own?,
         enemy_souls: enemy?,
+        game_mode: (s.game_mode == Some(GameMode::Normal)).then_some("normal"),
+        paused: s.paused,
+        midboss,
     })
 }
 
@@ -181,6 +226,7 @@ mod tests {
     use super::*;
     use deadlock_core::{HeroId, Team};
     use deadlock_reader::snapshot::{GameState, MatchClock, PlayerRow};
+    use deadlock_reader::timers::ObjectiveTimer;
 
     fn snapshot() -> LiveSnapshot {
         LiveSnapshot {
@@ -189,6 +235,7 @@ mod tests {
             context: Context::Match,
             perspective: Perspective::Playing,
             game_state: Some(GameState::GameInProgress),
+            game_mode: Some(GameMode::Normal),
             clock: MatchClock {
                 game_start_time: Some(10.0),
                 now: Some(52.8),
@@ -220,7 +267,7 @@ mod tests {
         let data = payload(&snapshot(), &HeroCatalog::bundled()).unwrap();
         assert_eq!(
             serde_json::to_value(data).unwrap(),
-            serde_json::json!({"match_id":"123", "hero":"Infernus", "game_seconds":42, "kills":2, "deaths":3, "assists":4, "team_souls":500, "enemy_souls":600})
+            serde_json::json!({"match_id":"123", "hero":"Infernus", "game_seconds":42, "kills":2, "deaths":3, "assists":4, "team_souls":500, "enemy_souls":600, "game_mode":"normal"})
         );
     }
 
@@ -245,6 +292,70 @@ mod tests {
         assert!(payload(&s, &heroes).is_none());
         s = snapshot();
         s.players[0].kills = None;
+        assert!(payload(&s, &heroes).is_none());
+    }
+
+    #[test]
+    fn forwards_only_game_backed_midboss_timer_and_pause_state() {
+        let heroes = HeroCatalog::bundled();
+        let mut s = snapshot();
+        s.paused = Some(true);
+        s.timers.midboss = Some(ObjectiveTimer {
+            present: Some(false),
+            count: Some(0),
+            next_spawn_in: Some(41.2),
+            source: TimerSource::Game,
+        });
+        let result = payload(&s, &heroes).unwrap();
+        assert_eq!(result.paused, Some(true));
+        assert_eq!(
+            result.midboss.as_ref().unwrap().next_spawn_in_seconds,
+            Some(42)
+        );
+        assert_eq!(result.midboss.as_ref().unwrap().source, "game");
+        s.timers.midboss.as_mut().unwrap().source = TimerSource::Schedule;
+        assert_eq!(payload(&s, &heroes).unwrap().midboss, None);
+        s.timers.midboss.as_mut().unwrap().source = TimerSource::Unknown;
+        assert_eq!(payload(&s, &heroes).unwrap().midboss, None);
+        s.timers.midboss.as_mut().unwrap().source = TimerSource::Game;
+        s.timers.midboss.as_mut().unwrap().present = None;
+        assert_eq!(payload(&s, &heroes).unwrap().midboss, None);
+        s.timers.midboss.as_mut().unwrap().present = Some(false);
+        s.game_mode = None;
+        assert_eq!(payload(&s, &heroes).unwrap().midboss, None);
+    }
+
+    #[test]
+    fn never_guesses_an_already_live_or_invalid_midboss_timer() {
+        let heroes = HeroCatalog::bundled();
+        let mut s = snapshot();
+        s.timers.midboss = Some(ObjectiveTimer {
+            present: Some(true),
+            count: Some(1),
+            next_spawn_in: Some(100.0),
+            source: TimerSource::Game,
+        });
+        assert_eq!(
+            payload(&s, &heroes)
+                .unwrap()
+                .midboss
+                .unwrap()
+                .next_spawn_in_seconds,
+            None
+        );
+        s.timers.midboss.as_mut().unwrap().present = Some(false);
+        for invalid in [f32::NAN, -1.0, f32::INFINITY, 100_000.0] {
+            s.timers.midboss.as_mut().unwrap().next_spawn_in = Some(invalid);
+            assert_eq!(
+                payload(&s, &heroes)
+                    .unwrap()
+                    .midboss
+                    .unwrap()
+                    .next_spawn_in_seconds,
+                None
+            );
+        }
+        s.dont_upload_stats = Some(true);
         assert!(payload(&s, &heroes).is_none());
     }
 

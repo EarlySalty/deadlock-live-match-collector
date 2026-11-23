@@ -16,13 +16,34 @@ The game-specific process reader and hero catalogue are Rust dependencies pinned
 
 ## What the collector reads and sends
 
+**Neue Entwicklungsfunktion (noch nicht als Windows-Release veröffentlicht):**
+Der Collector überträgt zusätzlich den Pausenstatus, falls dieser vom Reader
+eindeutig vorliegt, und ausschließlich einen vom Spiel selbst gemeldeten
+Mid-Boss-Zustand bzw. dessen nächsten Spawn. Die Herkunft wird mit
+`source: "game"` markiert. Rift-, Urnen-, Jungle- und Bridge-Buff-Respawns
+bleiben **unbekannt**, wenn die Client-Daten keine zuverlässige nächste
+Spawnzeit liefern. Es gibt keinerlei Hochrechnung aus vorherigen Kills,
+keine Gegnerpositionen, keine versteckten Fähigkeiten-Cooldowns und keine
+automatische Weiterzählung im OBS-Browser.
+
+Serverseitige Ergänzung im Twitch-Bot:
+`POST /twitch/api/v2/live-match` (bestehender Pfad),
+`GET /twitch/api/v2/public/live-match?streamer=...` (kurzlebige Anzeige),
+`GET/POST/DELETE /twitch/api/v2/streamer/live-match-key` (eigener Kanal).
+Der neue Schlüssel wird vom eingeloggten Streamer einmalig erzeugt und beim
+Neuerstellen der alte widerrufen. **Nicht** in der OBS-URL verwenden.
+Der Server muss mit der zugehörigen Datenbankmigration ausgerollt sein,
+bevor der Collector mit diesem Branch verwendet werden kann.
+
 Every three seconds the collector asks the read-only deadlock-rs library for a snapshot of the running game. It checks that you are playing, identifies your hero and team, and sums the players’ net worth for each side. It skips spectator sessions and incomplete scoreboards. [Collector source](src/main.rs) · [Pinned reader source](https://github.com/deadlock-plus/deadlock-rs/tree/8b408b9103a022e7bac620bfa4916778b8fdfaa1)
 
 The collector sends one HTTPS POST to `https://deutsche-deadlock-community.de/twitch/api/v2/live-match` for each usable snapshot. This example shows the entire JSON body.
 
 ```json
-{"match_id":"123","hero":"Infernus","game_seconds":42,"kills":2,"deaths":3,"assists":4,"team_souls":500,"enemy_souls":600}
+{"match_id":"123","hero":"Infernus","game_seconds":42,"kills":2,"deaths":3,"assists":4,"team_souls":500,"enemy_souls":600,"game_mode":"normal","paused":false,"midboss":{"present":false,"next_spawn_in_seconds":90,"source":"game"}}
 ```
+
+The optional `paused` and `midboss` properties are sent only when the pinned reader actually supplies them; the JSON above is an example, not a live measurement. If the game marks the match `dont_upload_stats` or the reader reports schema drift, the collector skips the snapshot.
 
 The channel key travels in the Authorization header. The interactive prompt hides it as you type, and the collector keeps it in memory until you close the program. The service uses these values for your public overlay. Press Ctrl+C to stop sending updates. Generate a new key in the builder to invalidate the previous one.
 
