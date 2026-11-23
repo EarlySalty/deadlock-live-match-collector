@@ -31,7 +31,23 @@ jobs:
         run: |
           cargo test --locked
           packaging/package-win64.sh
-          (cd dist && sha256sum *.zip > SHA256SUMS)
+          (cd dist && sha256sum ./*.zip > SHA256SUMS)
+      - name: Scan the packaged Windows executable
+        shell: bash
+        run: |
+          exe="$RUNNER_TEMP/live-match-collector.exe"
+          unzip -p dist/*.zip live-match-collector.exe > "$exe"
+          test -s "$exe"
+          docker pull clamav/clamav:stable
+          scanner=$(docker image inspect --format '{{index .RepoDigests 0}}' clamav/clamav:stable)
+          {
+            echo "$scanner"
+            docker run --rm --network none --entrypoint clamscan "$scanner" --version
+            (cd "$RUNNER_TEMP" && sha256sum live-match-collector.exe)
+            docker run --rm --network none --entrypoint clamscan \
+              --mount "type=bind,src=$exe,dst=/scan/live-match-collector.exe,readonly" \
+              "$scanner" /scan/live-match-collector.exe
+          } | tee dist/clamav-report.txt
       - name: Attest the ZIP
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
@@ -41,4 +57,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
-            --notes 'Windows x64 collector with setup instructions and third-party notices. SHA256SUMS lists the ZIP checksum.' dist/*.zip dist/SHA256SUMS
+            --notes-file packaging/release-notes.md dist/*.zip dist/SHA256SUMS dist/clamav-report.txt

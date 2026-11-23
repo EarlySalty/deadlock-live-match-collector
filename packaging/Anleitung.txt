@@ -1,5 +1,20 @@
 Live-Match-Daten für dein Twitch-Overlay
 
+Vor dem ersten Start
+
+Windows kann bei dieser unsignierten Anwendung „Der Computer wurde durch
+Windows geschützt“ anzeigen. SmartScreen berücksichtigt unter anderem, wie
+bekannt eine Datei ist. Vergleiche die SHA-256-Prüfsumme der ZIP mit der
+veröffentlichten Prüfsumme. Stimmen beide überein und vertraust du der
+Quelle, kannst du den Start bestätigen, falls Windows das anbietet.
+
+Meldet dein Virenscanner eine konkrete Bedrohung, lass die Datei gesperrt.
+Melde den Erkennungsnamen, die Collector-Version und die SHA-256-Prüfsumme
+der EXE unter https://github.com/EarlySalty/deadlock-live-match-collector/issues.
+Halte deinen Kanalschlüssel geheim.
+
+Einrichtung
+
 1. Öffne den Overlay-Baukasten in deinem Partner-Dashboard. Aktiviere die
    wechselnden Karten und kopiere die Overlay-URL in eine OBS-Browserquelle.
 2. Erstelle im Baukasten einen Verbindungsschlüssel für deinen Kanal.
