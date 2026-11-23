@@ -1,0 +1,18 @@
+Live-Match-Daten für dein Twitch-Overlay
+
+1. Öffne den Overlay-Baukasten in deinem Partner-Dashboard. Aktiviere die
+   wechselnden Karten und kopiere die Overlay-URL in eine OBS-Browserquelle.
+2. Erstelle im Baukasten einen Verbindungsschlüssel für deinen Kanal.
+3. Entpacke das ZIP auf deinem Windows-Spielrechner. Starte
+   live-match-collector.exe und füge den Schlüssel im Konsolenfenster ein.
+   Die Eingabe bleibt unsichtbar. Bestätige mit der Eingabetaste.
+4. Lass das Fenster während des Spiels geöffnet. Mit Strg+C beendest du
+   die Übertragung. Beim nächsten Start gibst du den Schlüssel erneut ein.
+
+Während du selbst spielst, sendet der Collector die Match-ID, deinen Helden,
+die Spielzeit, deine Kills, Tode und Assists und die Seelen beider Teams
+an den Twitch-Bot der Deutschen Deadlock Community. Wer deine öffentliche
+Overlay-URL kennt, kann die aktuellen Werte sehen.
+
+Wenn die Verbindung abreißt, blendet das Overlay die Live-Karte nach kurzer
+Zeit aus. Erstellst du einen neuen Schlüssel, verliert der alte seine Gültigkeit.
