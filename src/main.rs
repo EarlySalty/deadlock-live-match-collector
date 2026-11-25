@@ -4,6 +4,7 @@ use std::io::{self, IsTerminal};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use deadlock_core::HeroId;
 use deadlock_data::HeroCatalog;
 use deadlock_reader::snapshot::{Context, GameMode, LiveSnapshot, Perspective};
 use deadlock_reader::supervise::{Attached, ReaderSupervisor};
@@ -14,10 +15,14 @@ use serde::Serialize;
 
 const ENDPOINT: &str = "https://deutsche-deadlock-community.de/twitch/api/v2/live-match";
 const PERIOD: Duration = Duration::from_secs(3);
+const MAX_CLOCK_SECONDS: f32 = 86_400.0;
+const MAX_SCORE: u32 = 1000;
+const MAX_SOULS: u32 = 1_000_000_000;
+const MAX_HERO_NAME: usize = 80;
+const MAX_MIDBOSS_SECONDS: f32 = 7200.0;
 
 #[derive(Debug, Serialize, PartialEq)]
 struct MidbossTelemetry {
-    /// Nur wenn der Client den Wert direkt meldet, niemals geschaetzte Respawns.
     present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_spawn_in_seconds: Option<u32>,
@@ -42,6 +47,44 @@ struct Payload {
     midboss: Option<MidbossTelemetry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     details: Option<telemetry::MatchDetails>,
+}
+
+fn midboss(s: &LiveSnapshot) -> Option<MidbossTelemetry> {
+    if s.game_mode != Some(GameMode::Normal) {
+        return None;
+    }
+    let timer = s.timers.midboss.as_ref()?;
+    if timer.source != TimerSource::Game {
+        return None;
+    }
+    let present = timer.present?;
+    let next_spawn_in_seconds = timer
+        .next_spawn_in
+        .filter(|n| !present && n.is_finite() && *n >= 0.0 && *n <= MAX_MIDBOSS_SECONDS)
+        .map(|n| n.ceil() as u32);
+    Some(MidbossTelemetry {
+        present,
+        next_spawn_in_seconds,
+        source: "game",
+    })
+}
+
+fn hero_name(heroes: &HeroCatalog, id: HeroId) -> String {
+    heroes
+        .hero_name(id)
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && name.len() <= MAX_HERO_NAME)
+        .filter(|name| !name.chars().any(char::is_control))
+        .map(str::to_owned)
+        .unwrap_or_else(|| id.0.to_string())
+}
+
+fn score(value: Option<u32>) -> Option<u32> {
+    value.filter(|n| *n <= MAX_SCORE)
+}
+
+fn souls(value: Option<u32>) -> Option<u32> {
+    value.filter(|n| *n <= MAX_SOULS)
 }
 
 fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
@@ -79,40 +122,10 @@ fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
     if hero_id.0 == 0 {
         return None;
     }
-    let hero = heroes
-        .hero_name(hero_id)
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| hero_id.0.to_string());
     let seconds = s.clock.playing_seconds()?;
-    if !seconds.is_finite() || seconds < 0.0 || seconds >= (u32::MAX as f32) {
+    if !seconds.is_finite() || !(0.0..=MAX_CLOCK_SECONDS).contains(&seconds) {
         return None;
     }
-    // Keine geschaetzten Routen, gegnerischen Positionen oder Cooldowns.
-    // Nur der direkt uebertragene Midboss-Timer darf als verifiziert gelten.
-    let midboss = (s.game_mode == Some(GameMode::Normal))
-        .then_some(())
-        .and_then(|_| s.timers.midboss.as_ref())
-        .and_then(|timer| {
-            if timer.source != TimerSource::Game {
-                return None;
-            }
-            let present = timer.present?;
-            let next_spawn_in_seconds = if present {
-                None
-            } else {
-                timer
-                    .next_spawn_in
-                    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0 && *seconds <= 7200.0)
-                    .map(|seconds| seconds.ceil() as u32)
-            };
-            Some(MidbossTelemetry {
-                present,
-                next_spawn_in_seconds,
-                source: "game",
-            })
-        });
     let game_mode = match s.game_mode {
         Some(GameMode::Normal) => Some("normal"),
         Some(GameMode::StreetBrawl) => Some("street_brawl"),
@@ -120,23 +133,26 @@ fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
     };
     Some(Payload {
         match_id: id.to_string(),
-        hero,
+        hero: hero_name(heroes, hero_id),
         game_seconds: seconds as u32,
-        kills: player.kills?,
-        deaths: player.deaths?,
-        assists: player.assists?,
-        team_souls: own?,
-        enemy_souls: enemy?,
+        kills: score(player.kills)?,
+        deaths: score(player.deaths)?,
+        assists: score(player.assists)?,
+        team_souls: souls(own)?,
+        enemy_souls: souls(enemy)?,
         game_mode,
         paused: s.paused,
-        midboss,
-        details: game_mode.and_then(|_| telemetry::collect(s, player)),
+        midboss: midboss(s),
+        details: game_mode
+            .is_some()
+            .then(|| telemetry::collect(s, player))
+            .flatten(),
     })
 }
 
 fn read_token() -> io::Result<String> {
     let token = if io::stdin().is_terminal() {
-        rpassword::prompt_password("Token: ")?
+        rpassword::prompt_password("Verbindungsschlüssel: ")?
     } else {
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
@@ -146,7 +162,7 @@ fn read_token() -> io::Result<String> {
     if token.is_empty() || token.contains(char::is_whitespace) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "Ungültiges Token",
+            "Ungültiger Verbindungsschlüssel",
         ));
     }
     Ok(token)
@@ -160,7 +176,7 @@ fn main() {
     let token = match read_token() {
         Ok(token) => token,
         Err(_) => {
-            eprintln!("Das Token konnte nicht gelesen werden.");
+            eprintln!("Der Verbindungsschlüssel konnte nicht gelesen werden.");
             std::process::exit(1);
         }
     };
@@ -206,7 +222,7 @@ fn main() {
                     {
                         Ok(response) if response.status().is_success() => None,
                         Ok(response) if response.status().as_u16() == 401 || response.status().as_u16() == 403 => {
-                            eprintln!("Token abgelehnt. Bitte ein aktuelles Token erstellen oder erneut eingeben und das Programm neu starten.");
+                            eprintln!("Verbindungsschlüssel abgelehnt. Erstelle im Overlay-Baukasten einen neuen Schlüssel und starte das Programm neu.");
                             std::process::exit(1);
                         }
                         Ok(response) => Some(format!("Übertragung abgelehnt (HTTP {}).", response.status().as_u16())),
@@ -234,7 +250,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deadlock_core::{HeroId, Team};
+    use deadlock_core::Team;
     use deadlock_reader::snapshot::{GameState, MatchClock, PlayerRow, TeamStats};
     use deadlock_reader::timers::ObjectiveTimer;
 
@@ -440,6 +456,53 @@ mod tests {
         let details = actual.details.unwrap();
         assert!(details.objectives.midboss.is_none());
         assert_eq!(details.scoreboard.len(), 2);
+    }
+
+    #[test]
+    fn stays_inside_the_limits_the_service_accepts() {
+        let heroes = HeroCatalog::bundled();
+        let mut s = snapshot();
+        s.players[0].kills = Some(1001);
+        assert!(payload(&s, &heroes).is_none());
+        s = snapshot();
+        s.players[1].net_worth = Some(1_000_000_001);
+        assert!(payload(&s, &heroes).is_none());
+        s = snapshot();
+        s.clock.now = Some(90_000.0);
+        assert!(payload(&s, &heroes).is_none());
+        s = snapshot();
+        s.players[0].level = Some(5000);
+        s.players[0].health = Some(-7);
+        s.players[0].max_health = Some(2_000_000);
+        s.players[0].hero_damage = Some(u32::MAX);
+        s.players[1].level = Some(5000);
+        s.players[1].slot = Some(40);
+        s.teams = vec![
+            TeamStats {
+                team: Team::AMBER,
+                players: 1,
+                rejuvenators: Some(5000),
+                ..Default::default()
+            },
+            TeamStats {
+                team: Team::SAPPHIRE,
+                players: 1,
+                kills: u32::MAX,
+                ..Default::default()
+            },
+        ];
+        let details = payload(&s, &heroes).unwrap().details.unwrap();
+        assert_eq!(details.scoreboard[0].level, None);
+        assert_eq!(details.scoreboard[0].hero_damage, None);
+        assert_eq!(details.scoreboard[1].level, None);
+        assert_eq!(details.scoreboard[1].slot, None);
+        assert_eq!(details.own_loadout.level, None);
+        assert_eq!(details.own_loadout.health, None);
+        assert_eq!(details.own_loadout.max_health, None);
+        assert_eq!(details.teams.len(), 1);
+        assert_eq!(details.teams[0].rejuvenators, None);
+        s.players[1].is_local = Some(true);
+        assert!(payload(&s, &heroes).unwrap().details.is_none());
     }
 
     #[test]

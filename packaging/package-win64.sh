@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Run on Linux with rustup, MinGW-w64, zip, jq, and the Windows GNU target installed.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

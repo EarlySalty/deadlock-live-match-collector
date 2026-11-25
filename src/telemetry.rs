@@ -1,8 +1,15 @@
-//! Versioniertes, bereinigtes Live-Match-Datenpaket.
-//! Keine Steam-IDs, Namen, Prozessadressen, Positionen oder gegnerischen Cooldowns.
-use deadlock_reader::snapshot::{GameMode, LiveSnapshot, ObjectiveKind, PlayerRow, StructureState};
+use deadlock_reader::snapshot::{
+    GameMode, LiveSnapshot, ObjectiveKind, PlayerRow, StructureState, TeamStats,
+};
 use deadlock_reader::timers::{ObjectiveTimer, TimerSource};
 use serde::Serialize;
+
+const MAX_STAT: u32 = 1_000_000_000;
+const MAX_LEVEL: u32 = 1000;
+const MAX_HEALTH: i32 = 1_000_000;
+const MAX_REJUVENATORS: u32 = 1000;
+const MAX_STRUCTURES: u32 = 128;
+const MAX_TIMER_SECONDS: f32 = 7200.0;
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct MatchDetails {
@@ -14,6 +21,7 @@ pub struct MatchDetails {
     pub structures: Vec<StructureRow>,
     pub objectives: ObjectiveRows,
 }
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct ScoreboardRow {
     pub side: &'static str,
@@ -32,6 +40,7 @@ pub struct ScoreboardRow {
     pub healing: Option<u32>,
     pub alive: Option<bool>,
 }
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct TeamRow {
     pub side: &'static str,
@@ -49,6 +58,7 @@ pub struct TeamRow {
     pub structures_alive: Option<u32>,
     pub complete: bool,
 }
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct OwnLoadout {
     pub level: Option<u32>,
@@ -65,12 +75,14 @@ pub struct OwnLoadout {
     pub items: Option<Vec<u32>>,
     pub ability_upgrades: Option<Vec<AbilityRow>>,
 }
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct AbilityRow {
     pub item_id: u32,
     pub unlocked: bool,
     pub points: u32,
 }
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct StructureRow {
     pub side: &'static str,
@@ -78,6 +90,7 @@ pub struct StructureRow {
     pub lane: Option<i32>,
     pub state: &'static str,
 }
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct ObjectiveRows {
     pub midboss: Option<ObjectiveRow>,
@@ -85,6 +98,7 @@ pub struct ObjectiveRows {
     pub rift: Option<ObjectiveRow>,
     pub bridge_buffs: Option<ObjectiveRow>,
 }
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct ObjectiveRow {
     pub present: Option<bool>,
@@ -103,7 +117,7 @@ fn objective(timer: Option<&ObjectiveTimer>) -> Option<ObjectiveRow> {
     };
     let seconds = timer
         .next_spawn_in
-        .filter(|n| n.is_finite() && *n >= 0.0 && *n <= 7200.0)
+        .filter(|n| n.is_finite() && *n >= 0.0 && *n <= MAX_TIMER_SECONDS)
         .map(|n| n.ceil() as u32);
     let seconds = if timer.present == Some(true) {
         None
@@ -119,6 +133,14 @@ fn objective(timer: Option<&ObjectiveTimer>) -> Option<ObjectiveRow> {
     })
 }
 
+fn stat(value: Option<u32>) -> Option<u32> {
+    value.filter(|n| *n <= MAX_STAT)
+}
+
+fn level(value: Option<u32>) -> Option<u32> {
+    value.filter(|n| *n <= MAX_LEVEL)
+}
+
 fn side(team: Option<deadlock_core::Team>, local: deadlock_core::Team) -> &'static str {
     match team {
         Some(team) if team == local => "own",
@@ -126,41 +148,109 @@ fn side(team: Option<deadlock_core::Team>, local: deadlock_core::Team) -> &'stat
         None => "unknown",
     }
 }
+
 fn scoreboard(row: &PlayerRow, local: deadlock_core::Team) -> ScoreboardRow {
+    let is_local = row.is_local == Some(true);
+    let own = |value: Option<u32>| stat(value).filter(|_| is_local);
     ScoreboardRow {
         side: side(row.team, local),
-        is_local: row.is_local == Some(true),
+        is_local,
         slot: row.slot.filter(|slot| (1..=12).contains(slot)),
         hero_id: row.hero_id.map(|id| id.0).filter(|id| *id > 0),
-        level: row.level,
-        souls: row.net_worth,
-        kills: row.kills,
-        deaths: row.deaths,
-        assists: row.assists,
-        // Nicht sichtbare Detailwerte anderer Spieler vermeiden.
-        last_hits: row
-            .is_local
-            .and_then(|local| local.then_some(row.last_hits))
-            .flatten(),
-        denies: row
-            .is_local
-            .and_then(|local| local.then_some(row.denies))
-            .flatten(),
-        hero_damage: row
-            .is_local
-            .and_then(|local| local.then_some(row.hero_damage))
-            .flatten(),
-        objective_damage: row
-            .is_local
-            .and_then(|local| local.then_some(row.objective_damage))
-            .flatten(),
-        healing: row
-            .is_local
-            .and_then(|local| local.then_some(row.healing))
-            .flatten(),
+        level: level(row.level),
+        souls: stat(row.net_worth),
+        kills: stat(row.kills),
+        deaths: stat(row.deaths),
+        assists: stat(row.assists),
+        last_hits: own(row.last_hits),
+        denies: own(row.denies),
+        hero_damage: own(row.hero_damage),
+        objective_damage: own(row.objective_damage),
+        healing: own(row.healing),
         alive: row.is_alive,
     }
 }
+
+fn team(stats: &TeamStats, local: deadlock_core::Team) -> Option<TeamRow> {
+    let totals = [stats.souls, stats.kills, stats.deaths, stats.assists];
+    if totals.iter().any(|n| *n > MAX_STAT) {
+        return None;
+    }
+    let own = |value: u32| stat(Some(value)).filter(|_| stats.team == local);
+    Some(TeamRow {
+        side: side(Some(stats.team), local),
+        souls: stats.souls,
+        ability_points: own(stats.ability_points),
+        kills: stats.kills,
+        deaths: stats.deaths,
+        assists: stats.assists,
+        last_hits: own(stats.last_hits),
+        denies: own(stats.denies),
+        hero_damage: own(stats.hero_damage),
+        objective_damage: own(stats.objective_damage),
+        healing: own(stats.healing),
+        rejuvenators: stats.rejuvenators.filter(|n| *n <= MAX_REJUVENATORS),
+        structures_alive: stats
+            .structures_known
+            .then_some(stats.structures_alive)
+            .filter(|n| *n <= MAX_STRUCTURES),
+        complete: stats.complete,
+    })
+}
+
+fn teams(s: &LiveSnapshot, local: deadlock_core::Team) -> Vec<TeamRow> {
+    let rows = s
+        .teams
+        .iter()
+        .filter(|stats| stats.players > 0)
+        .take(2)
+        .filter_map(|stats| team(stats, local))
+        .collect::<Vec<_>>();
+    if rows.len() == 2 && rows[0].side == rows[1].side {
+        return Vec::new();
+    }
+    rows
+}
+
+fn structures(s: &LiveSnapshot, local: deadlock_core::Team) -> Vec<StructureRow> {
+    s.objectives
+        .iter()
+        .filter(|o| {
+            matches!(
+                o.kind,
+                ObjectiveKind::Guardian
+                    | ObjectiveKind::Walker
+                    | ObjectiveKind::BaseGuardian
+                    | ObjectiveKind::Patron
+                    | ObjectiveKind::Shrine
+                    | ObjectiveKind::Midboss
+            )
+        })
+        .take(48)
+        .map(|o| StructureRow {
+            side: side(o.team, local),
+            kind: o.kind.label(),
+            lane: o.lane.filter(|n| (0..=8).contains(n)),
+            state: match o.state {
+                StructureState::Standing => "standing",
+                StructureState::Destroyed => "destroyed",
+                StructureState::Unknown => "unknown",
+            },
+        })
+        .collect()
+}
+
+fn objectives(s: &LiveSnapshot) -> ObjectiveRows {
+    let normal = s.game_mode == Some(GameMode::Normal);
+    let row = |timer: &Option<ObjectiveTimer>| normal.then(|| objective(timer.as_ref())).flatten();
+    ObjectiveRows {
+        midboss: row(&s.timers.midboss),
+        urn: row(&s.timers.urn),
+        rift: row(&s.timers.rift),
+        bridge_buffs: row(&s.timers.bridge_buffs),
+    }
+}
+
 fn local_loadout(local: &PlayerRow) -> OwnLoadout {
     let items = local
         .items
@@ -181,79 +271,32 @@ fn local_loadout(local: &PlayerRow) -> OwnLoadout {
                 .collect()
         });
     OwnLoadout {
-        level: local.level,
-        health: local.health,
-        max_health: local.max_health,
-        souls: local.net_worth,
-        ability_points: local.ability_points,
-        creep_souls: local.creep_souls,
-        secured_souls: local.secured_souls,
-        denied_souls: local.denied_souls,
-        neutral_souls: local.neutral_souls,
-        farm_baseline: local.farm_baseline,
-        kill_streak: local.kill_streak,
+        level: level(local.level),
+        health: local.health.filter(|n| (-1..=MAX_HEALTH).contains(n)),
+        max_health: local.max_health.filter(|n| (0..=MAX_HEALTH).contains(n)),
+        souls: stat(local.net_worth),
+        ability_points: stat(local.ability_points),
+        creep_souls: stat(local.creep_souls),
+        secured_souls: stat(local.secured_souls),
+        denied_souls: stat(local.denied_souls),
+        neutral_souls: stat(local.neutral_souls),
+        farm_baseline: stat(local.farm_baseline),
+        kill_streak: stat(local.kill_streak),
         items,
         ability_upgrades,
     }
 }
+
 pub fn collect(s: &LiveSnapshot, local: &PlayerRow) -> Option<MatchDetails> {
     let local_team = local.team?;
-    let rows = s.scoreboard().collect::<Vec<_>>();
-    if rows.is_empty() || rows.len() > 12 {
+    let rows = s
+        .scoreboard()
+        .filter(|row| !row.is_spectator)
+        .collect::<Vec<_>>();
+    let locals = rows.iter().filter(|r| r.is_local == Some(true)).count();
+    if rows.len() > 12 || locals != 1 {
         return None;
     }
-    let scoreboard = rows.iter().map(|r| scoreboard(r, local_team)).collect();
-    let teams = s
-        .teams
-        .iter()
-        .filter(|r| r.players > 0)
-        .take(2)
-        .map(|t| TeamRow {
-            side: side(Some(t.team), local_team),
-            souls: t.souls,
-            ability_points: (t.team == local_team).then_some(t.ability_points),
-            kills: t.kills,
-            deaths: t.deaths,
-            assists: t.assists,
-            last_hits: (t.team == local_team).then_some(t.last_hits),
-            denies: (t.team == local_team).then_some(t.denies),
-            hero_damage: (t.team == local_team).then_some(t.hero_damage),
-            objective_damage: (t.team == local_team).then_some(t.objective_damage),
-            healing: (t.team == local_team).then_some(t.healing),
-            rejuvenators: t.rejuvenators,
-            structures_alive: t.structures_known.then_some(t.structures_alive),
-            complete: t.complete,
-        })
-        .collect();
-    let structures = s
-        .objectives
-        .iter()
-        .filter(|o| {
-            matches!(
-                o.kind,
-                ObjectiveKind::Guardian
-                    | ObjectiveKind::Walker
-                    | ObjectiveKind::BaseGuardian
-                    | ObjectiveKind::Patron
-                    | ObjectiveKind::Shrine
-                    | ObjectiveKind::Midboss
-            )
-        })
-        .take(48)
-        .map(|o| StructureRow {
-            side: side(o.team, local_team),
-            kind: o.kind.label(),
-            lane: o.lane.filter(|n| (0..=8).contains(n)),
-            state: match o.state {
-                StructureState::Standing => "standing",
-                StructureState::Destroyed => "destroyed",
-                StructureState::Unknown => "unknown",
-            },
-        })
-        .collect();
-    // Objektiv-Timer gelten nur fuer den Standardmodus. In Brawl gibt es
-    // andere Spielphasen; deren Werte sind hier bewusst unbekannt.
-    let normal_objectives = s.game_mode == Some(GameMode::Normal);
     Some(MatchDetails {
         schema_version: 1,
         capabilities: &[
@@ -264,24 +307,11 @@ pub fn collect(s: &LiveSnapshot, local: &PlayerRow) -> Option<MatchDetails> {
             "objectives",
             "timer_provenance",
         ],
-        scoreboard,
-        teams,
+        scoreboard: rows.iter().map(|r| scoreboard(r, local_team)).collect(),
+        teams: teams(s, local_team),
         own_loadout: local_loadout(local),
-        structures,
-        objectives: ObjectiveRows {
-            midboss: normal_objectives
-                .then(|| objective(s.timers.midboss.as_ref()))
-                .flatten(),
-            urn: normal_objectives
-                .then(|| objective(s.timers.urn.as_ref()))
-                .flatten(),
-            rift: normal_objectives
-                .then(|| objective(s.timers.rift.as_ref()))
-                .flatten(),
-            bridge_buffs: normal_objectives
-                .then(|| objective(s.timers.bridge_buffs.as_ref()))
-                .flatten(),
-        },
+        structures: structures(s, local_team),
+        objectives: objectives(s),
     })
 }
 
