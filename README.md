@@ -16,6 +16,8 @@ The game-specific process reader and hero catalogue are Rust dependencies pinned
 
 ## What the collector reads and sends
 
+The collector gets its values by reading the memory of the Deadlock process running on your PC. It only reads. It does not write to the game, inject code or hook functions. Valve decides how it treats external readers, and neither this project nor the reader library can promise how that policy applies. Decide for yourself whether you want to run it on your account.
+
 Every three seconds the collector asks the read-only deadlock-rs library for a snapshot of the running game. It checks that you are playing, identifies your hero and team, and sums the players’ net worth for each side. It skips spectator sessions and incomplete scoreboards. If the game marks the match `dont_upload_stats` or the reader reports schema drift, the collector skips the snapshot. [Collector source](src/main.rs) · [Pinned reader source](https://github.com/deadlock-plus/deadlock-rs/tree/8b408b9103a022e7bac620bfa4916778b8fdfaa1)
 
 The collector sends one HTTPS POST to `https://deutsche-deadlock-community.de/twitch/api/v2/live-match` for each usable snapshot. The body always starts with these summary fields.
@@ -88,4 +90,4 @@ cargo test --locked
 cargo build --locked --release
 ```
 
-With Cargo’s default target directory, the executable is written to `target/release/live-match-collector.exe`. The release workflow cross-compiles the Windows GNU target on Linux. The packaging script needs rustup with the `x86_64-pc-windows-gnu` target, MinGW-w64, zip and jq. Its packaging script puts the executable, setup instructions and dependency notices in `dist/`. [Release workflow](.github/workflows/release.yml) · [Packaging script](packaging/package-win64.sh)
+With Cargo’s default target directory, the executable is written to `target/release/live-match-collector.exe`. The release workflow cross-compiles the Windows GNU target on Ubuntu. The packaging script needs rustup with the `x86_64-pc-windows-gnu` target, the Ubuntu MinGW-w64 packages, zip and jq. It puts the executable, setup instructions and dependency notices in `dist/` and stops if the executable would need a MinGW runtime DLL. The scan script runs ClamAV on the packaged executable. A second workflow runs the same build, packaging and scan on every branch push without publishing anything. [Release workflow](.github/workflows/release.yml) · [Build check](.github/workflows/ci.yml) · [Packaging script](packaging/package-win64.sh) · [Scan script](packaging/scan-win64.sh)

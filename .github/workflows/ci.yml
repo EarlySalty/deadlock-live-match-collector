@@ -1,0 +1,30 @@
+name: Check Windows build
+
+on:
+  push:
+    branches: ['**']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install Windows build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+          rustup target add x86_64-pc-windows-gnu
+      - name: Test and package
+        run: |
+          cargo test --locked
+          packaging/package-win64.sh
+          (cd dist && sha256sum ./*.zip > SHA256SUMS)
+      - name: Scan the packaged Windows executable
+        run: packaging/scan-win64.sh
+      - name: List the package
+        run: unzip -l dist/*.zip

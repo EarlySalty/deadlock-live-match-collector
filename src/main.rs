@@ -87,13 +87,94 @@ fn souls(value: Option<u32>) -> Option<u32> {
     value.filter(|n| *n <= MAX_SOULS)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum Status {
+    Waiting,
+    Outdated,
+    Excluded,
+    Unreadable,
+    Sending,
+    KeyRejected,
+    Rejected(u16),
+    Unreachable,
+}
+
+impl Status {
+    fn patience(&self) -> u8 {
+        match self {
+            Status::Sending | Status::KeyRejected => 1,
+            Status::Rejected(_) | Status::Unreachable => 3,
+            _ => 5,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Status::Waiting => "Warte auf ein laufendes Deadlock-Match.".to_owned(),
+            Status::Outdated => "Deadlock hat sich seit dieser Programmversion verändert. Es wird nichts übertragen. Prüfe, ob es eine neuere Version des Collectors gibt.".to_owned(),
+            Status::Excluded => "Für dieses Match lädt Deadlock selbst keine Statistiken hoch. Der Collector sendet deshalb nichts.".to_owned(),
+            Status::Unreadable => "Match erkannt, aber die Spieldaten sind nicht vollständig lesbar. Solange wird nichts übertragen.".to_owned(),
+            Status::Sending => "Match erkannt. Die Live-Daten werden übertragen.".to_owned(),
+            Status::KeyRejected => "Verbindungsschlüssel abgelehnt. Erstelle im Overlay-Baukasten einen neuen Schlüssel und starte das Programm neu.".to_owned(),
+            Status::Rejected(code) => format!("Der Server hat die Übertragung abgelehnt (HTTP {code}). Es wird weiter versucht."),
+            Status::Unreachable => "Der Server ist nicht erreichbar. Es wird weiter versucht.".to_owned(),
+        }
+    }
+}
+
+struct Announcer {
+    shown: Status,
+    candidate: Status,
+    seen: u8,
+}
+
+impl Announcer {
+    fn new() -> Self {
+        Announcer {
+            shown: Status::Waiting,
+            candidate: Status::Waiting,
+            seen: 0,
+        }
+    }
+
+    fn observe(&mut self, status: Status) -> Option<String> {
+        if status == self.shown {
+            self.seen = 0;
+            return None;
+        }
+        if status == self.candidate && self.seen > 0 {
+            self.seen = self.seen.saturating_add(1);
+        } else {
+            self.candidate = status.clone();
+            self.seen = 1;
+        }
+        if self.seen < status.patience() {
+            return None;
+        }
+        self.seen = 0;
+        self.shown = status;
+        Some(self.shown.message())
+    }
+}
+
+fn in_match(s: &LiveSnapshot) -> bool {
+    s.context == Context::Match
+        && s.perspective == Perspective::Playing
+        && s.game_state.is_some_and(|state| state.is_live())
+}
+
+fn skipped(s: &LiveSnapshot) -> Status {
+    if !s.drift.is_empty() {
+        Status::Outdated
+    } else if s.dont_upload_stats == Some(true) {
+        Status::Excluded
+    } else {
+        Status::Unreadable
+    }
+}
+
 fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
-    if s.context != Context::Match
-        || s.perspective != Perspective::Playing
-        || !s.game_state?.is_live()
-        || !s.drift.is_empty()
-        || s.dont_upload_stats == Some(true)
-    {
+    if !in_match(s) || !s.drift.is_empty() || s.dont_upload_stats == Some(true) {
         return None;
     }
     let id = s.match_id.filter(|id| *id > 0)?;
@@ -150,35 +231,71 @@ fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
     })
 }
 
-fn read_token() -> io::Result<String> {
-    let token = if io::stdin().is_terminal() {
-        rpassword::prompt_password("Verbindungsschlüssel: ")?
-    } else {
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        input
-    };
-    let token = token.trim().to_owned();
-    if token.is_empty() || token.contains(char::is_whitespace) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Ungültiger Verbindungsschlüssel",
-        ));
+const UNREADABLE_KEY: &str = "Der Verbindungsschlüssel konnte nicht gelesen werden.";
+
+fn checked_token(input: &str) -> Result<String, &'static str> {
+    let token = input.trim();
+    if token.is_empty() {
+        return Err("Es wurde kein Verbindungsschlüssel eingegeben.");
     }
-    Ok(token)
+    if !token.chars().all(|c| c.is_ascii_graphic()) {
+        return Err("Der Verbindungsschlüssel enthält ungültige Zeichen. Kopiere ihn vollständig aus dem Overlay-Baukasten.");
+    }
+    Ok(token.to_owned())
+}
+
+fn read_token() -> Result<String, &'static str> {
+    if !io::stdin().is_terminal() {
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|_| UNREADABLE_KEY)?;
+        return checked_token(&input);
+    }
+    loop {
+        let input =
+            rpassword::prompt_password("Verbindungsschlüssel: ").map_err(|_| UNREADABLE_KEY)?;
+        match checked_token(&input) {
+            Ok(token) => return Ok(token),
+            Err(reason) => eprintln!("{reason}"),
+        }
+    }
+}
+
+fn leave(message: &str, code: i32) -> ! {
+    eprintln!("{message}");
+    if io::stdin().is_terminal() {
+        eprintln!("Drücke die Eingabetaste, um das Programm zu schließen.");
+        let _ = io::stdin().read_line(&mut String::new());
+    }
+    std::process::exit(code)
+}
+
+fn upload(client: &Client, token: &str, data: &Payload, budget: Duration) -> Status {
+    match client
+        .post(ENDPOINT)
+        .timeout(budget)
+        .bearer_auth(token)
+        .json(data)
+        .send()
+    {
+        Ok(response) if response.status().is_success() => Status::Sending,
+        Ok(response) if response.status().as_u16() == 401 => Status::KeyRejected,
+        Ok(response) => Status::Rejected(response.status().as_u16()),
+        Err(_) => Status::Unreachable,
+    }
 }
 
 fn main() {
     if std::env::args_os().len() != 1 {
-        eprintln!("Dieses Programm akzeptiert keine Befehlszeilenargumente.");
-        std::process::exit(2);
+        leave(
+            "Dieses Programm akzeptiert keine Befehlszeilenargumente.",
+            2,
+        );
     }
     let token = match read_token() {
         Ok(token) => token,
-        Err(_) => {
-            eprintln!("Der Verbindungsschlüssel konnte nicht gelesen werden.");
-            std::process::exit(1);
-        }
+        Err(reason) => leave(reason, 1),
     };
     let client = match Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -186,15 +303,15 @@ fn main() {
         .build()
     {
         Ok(client) => client,
-        Err(_) => {
-            eprintln!("Die sichere Verbindung konnte nicht eingerichtet werden.");
-            std::process::exit(1);
-        }
+        Err(_) => leave(
+            "Die sichere Verbindung konnte nicht eingerichtet werden.",
+            1,
+        ),
     };
     let heroes = HeroCatalog::bundled();
     let mut supervisor = ReaderSupervisor::new(PERIOD);
+    let mut announcer = Announcer::new();
     eprintln!("Warte auf ein laufendes Deadlock-Match. Beenden mit Strg+C.");
-    let mut last_transfer_error: Option<String> = None;
     loop {
         let started = Instant::now();
         let snapshot = match supervisor.acquire() {
@@ -205,43 +322,34 @@ fn main() {
             }
             _ => None,
         };
-        match snapshot {
+        let status = match snapshot {
             Some(Ok(snapshot)) => {
                 supervisor.succeeded();
-                if let Some(data) = snapshot.as_ref().and_then(|s| payload(s, &heroes)) {
-                    let budget = PERIOD.saturating_sub(started.elapsed());
-                    if budget.is_zero() {
-                        continue;
-                    }
-                    let error = match client
-                        .post(ENDPOINT)
-                        .timeout(budget)
-                        .bearer_auth(&token)
-                        .json(&data)
-                        .send()
-                    {
-                        Ok(response) if response.status().is_success() => None,
-                        Ok(response) if response.status().as_u16() == 401 || response.status().as_u16() == 403 => {
-                            eprintln!("Verbindungsschlüssel abgelehnt. Erstelle im Overlay-Baukasten einen neuen Schlüssel und starte das Programm neu.");
-                            std::process::exit(1);
+                match snapshot.as_ref() {
+                    Some(s) if in_match(s) => match payload(s, &heroes) {
+                        Some(data) => {
+                            let budget = PERIOD.saturating_sub(started.elapsed());
+                            if budget.is_zero() {
+                                continue;
+                            }
+                            upload(&client, &token, &data, budget)
                         }
-                        Ok(response) => Some(format!("Übertragung abgelehnt (HTTP {}).", response.status().as_u16())),
-                        Err(_) => Some("Übertragung fehlgeschlagen. Beim nächsten Messwert wird erneut versucht.".to_owned()),
-                    };
-                    if error != last_transfer_error {
-                        if let Some(message) = &error {
-                            eprintln!("{message}");
-                        } else if last_transfer_error.is_some() {
-                            eprintln!("Die Übertragung funktioniert wieder.");
-                        }
-                        last_transfer_error = error;
-                    }
+                        None => skipped(s),
+                    },
+                    _ => Status::Waiting,
                 }
             }
             Some(Err(_)) => {
                 supervisor.failed();
+                Status::Waiting
             }
-            None => {}
+            None => Status::Waiting,
+        };
+        if status == Status::KeyRejected {
+            leave(&status.message(), 1);
+        }
+        if let Some(message) = announcer.observe(status) {
+            eprintln!("{message}");
         }
         thread::sleep(PERIOD.saturating_sub(started.elapsed()));
     }
@@ -538,5 +646,35 @@ mod tests {
         assert!(payload(&s, &heroes).is_none());
         s.players.truncate(1);
         assert!(payload(&s, &heroes).is_none());
+    }
+
+    #[test]
+    fn accepts_only_keys_that_fit_an_http_header() {
+        assert_eq!(checked_token("  dlm_abc123\r\n").unwrap(), "dlm_abc123");
+        for invalid in ["", " \r\n", "dlm_abc 123", "dlm_schlüssel", "dlm_\u{7}abc"] {
+            assert!(checked_token(invalid).is_err(), "accepted {invalid:?}");
+        }
+    }
+
+    #[test]
+    fn reports_a_status_once_and_only_when_it_holds() {
+        let mut announcer = Announcer::new();
+        assert_eq!(announcer.observe(Status::Waiting), None);
+        assert!(announcer.observe(Status::Sending).is_some());
+        assert_eq!(announcer.observe(Status::Sending), None);
+        assert_eq!(announcer.observe(Status::Unreachable), None);
+        assert_eq!(announcer.observe(Status::Sending), None);
+        assert_eq!(announcer.observe(Status::Unreachable), None);
+        assert_eq!(announcer.observe(Status::Unreachable), None);
+        assert!(announcer.observe(Status::Unreachable).is_some());
+        assert!(announcer.observe(Status::Sending).is_some());
+        let mut s = snapshot();
+        s.players[1].net_worth = None;
+        assert!(in_match(&s));
+        assert_eq!(skipped(&s), Status::Unreadable);
+        s.dont_upload_stats = Some(true);
+        assert_eq!(skipped(&s), Status::Excluded);
+        s.game_state = Some(GameState::PostGame);
+        assert!(!in_match(&s));
     }
 }

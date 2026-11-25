@@ -13,7 +13,14 @@ archive="live-match-collector-${version}-win64.zip"
 tree="$stage/package"
 mkdir -p "$tree/Lizenzen" "$out"
 target_dir=$(jq -r '.target_directory' "$stage/metadata.json")
-cp "$target_dir/$target/release/live-match-collector.exe" "$tree/"
+exe="$target_dir/$target/release/live-match-collector.exe"
+imports=$(x86_64-w64-mingw32-objdump -p "$exe" | awk '/DLL Name:/ { print $3 }' | sort -u)
+echo "$imports" >&2
+if grep -Eiq '^lib(gcc|winpthread|stdc)' <<< "$imports"; then
+  echo "The executable depends on a MinGW runtime DLL that Windows does not ship" >&2
+  exit 1
+fi
+cp "$exe" "$tree/"
 cp packaging/Anleitung.txt "$tree/"
 while IFS=$'\t' read -r package manifest; do
   dest="$tree/Lizenzen/$package"
@@ -27,6 +34,7 @@ while IFS=$'\t' read -r package manifest; do
   fi
 done < <(jq -r '.packages[] | select(.source != null) | [(.name + "-" + .version), .manifest_path] | @tsv' "$stage/metadata.json")
 cp "$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html" "$tree/Lizenzen/Rust.html"
+cp /usr/share/doc/mingw-w64-common/copyright "$tree/Lizenzen/MinGW-w64.txt"
 (cd "$tree" && zip -q -X -r "$stage/$archive" .)
 mv "$stage/$archive" "$out/$archive"
 sha256sum "$out/$archive"

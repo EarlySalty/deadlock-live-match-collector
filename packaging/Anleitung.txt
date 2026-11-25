@@ -21,19 +21,39 @@ Einrichtung
 3. Entpacke das ZIP auf deinem Windows-Spielrechner. Starte
    live-match-collector.exe und füge den Schlüssel im Konsolenfenster ein.
    Die Eingabe bleibt unsichtbar. Bestätige mit der Eingabetaste.
-4. Lass das Fenster während des Spiels geöffnet. Mit Strg+C beendest du
-   die Übertragung. Beim nächsten Start gibst du den Schlüssel erneut ein.
+4. Lass das Fenster während des Spiels geöffnet. Sobald dein Match läuft,
+   meldet es „Match erkannt. Die Live-Daten werden übertragen.“ Kann das
+   Programm nichts senden, steht der Grund im Fenster. Mit Strg+C beendest
+   du die Übertragung. Beim nächsten Start gibst du den Schlüssel erneut
+   ein.
+
+Wie das Programm an die Daten kommt
+
+Der Collector liest die Werte aus dem Arbeitsspeicher des laufenden
+Deadlock-Prozesses auf deinem Rechner. Er liest ausschließlich. Er schreibt
+nichts in das Spiel und greift nicht in den Spielablauf ein. Wie Valve mit
+solchen Leseprogrammen umgeht, entscheidet allein Valve. Eine Zusage dazu
+können wir nicht geben. Entscheide selbst, ob du das Programm mit deinem
+Konto nutzen möchtest.
+
+Was gesendet wird
 
 Während du selbst spielst, sendet der Collector die Match-ID, deinen Helden,
 die Spielzeit, deine Kills, Tode und Assists und die Seelen beider Teams
 an den Twitch-Bot der Deutschen Deadlock Community. Dazu kommen der
 Spielmodus, der Pausenstatus und der Mid-Boss: ob er gerade steht und wann
 er wieder erscheint, sofern das Spiel diese Zeit selbst meldet. Zeiten für
-Urne, Rift und Jungle-Camps werden nicht geraten.
+Urne, Rift und Jungle-Camps werden nicht geraten. Für die Brücken-Buffs
+sendet der Collector eine berechnete Zeit, die als Schätzung gekennzeichnet
+ist.
 
-Außerdem überträgt der Collector die Anzeigetafel des Matches mit Held,
-Level, Seelen, Kills, Toden und Assists aller Spieler, die Summen beider
-Teams, den Zustand der Gebäude sowie deine eigenen Items,
+Außerdem überträgt der Collector die Anzeigetafel des Matches. Von allen
+Spielern sind das Held, Platz auf der Anzeigetafel, Level, Seelen, Kills,
+Tode und Assists und ob sie gerade leben. Dazu kommen die Summen beider Teams, der Zustand der
+Gebäude und für Mid-Boss, Urne, Rift und Brücken-Buffs, ob sie gerade auf
+der Karte sind. Nur von dir und als Summe deines Teams werden Last Hits,
+Denies, Schaden und Heilung gesendet. Nur von dir selbst kommen die
+Herkunft deiner Seelen, deine Kill-Serie, deine Items,
 Fähigkeiten-Upgrades und Lebenspunkte. Spielernamen, Steam-IDs, Positionen
 und Abklingzeiten der Gegner werden nicht gesendet.
 
