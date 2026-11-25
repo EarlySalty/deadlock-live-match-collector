@@ -2,22 +2,25 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+exec 3>&1 1>&2
 target=x86_64-pc-windows-gnu
+out="$(pwd)/dist"
+mkdir -p "$out"
+rm -f "$out"/live-match-collector-*-win64.zip "$out/SHA256SUMS" "$out/clamav-report.txt"
 cargo build --locked --release --target "$target"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 cargo metadata --format-version 1 --locked --filter-platform "$target" > "$stage/metadata.json"
 version=$(jq -r '.packages[] | select(.name == "live-match-collector").version' "$stage/metadata.json")
-out="$(pwd)/dist"
 archive="live-match-collector-${version}-win64.zip"
 tree="$stage/package"
-mkdir -p "$tree/Lizenzen" "$out"
+mkdir -p "$tree/Lizenzen"
 target_dir=$(jq -r '.target_directory' "$stage/metadata.json")
 exe="$target_dir/$target/release/live-match-collector.exe"
 imports=$(x86_64-w64-mingw32-objdump -p "$exe" | awk '/DLL Name:/ { print $3 }' | sort -u)
-echo "$imports" >&2
+echo "$imports"
 if grep -Eiq '^lib(gcc|winpthread|stdc)' <<< "$imports"; then
-  echo "The executable depends on a MinGW runtime DLL that Windows does not ship" >&2
+  echo "The executable depends on a MinGW runtime DLL that Windows does not ship"
   exit 1
 fi
 cp "$exe" "$tree/"
@@ -29,7 +32,7 @@ while IFS=$'\t' read -r package manifest; do
     \( -iname 'license*' -o -iname 'licence*' -o -iname 'notice*' -o -iname 'copying*' -o -iname 'copyright*' \) \
     -exec cp -rL -- {} "$dest/" \;
   if [[ -z "$(ls -A "$dest")" ]]; then
-    echo "Missing third-party notices for $package" >&2
+    echo "Missing third-party notices for $package"
     exit 1
   fi
 done < <(jq -r '.packages[] | select(.source != null) | [(.name + "-" + .version), .manifest_path] | @tsv' "$stage/metadata.json")
@@ -37,4 +40,5 @@ cp "$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html" "$tree/Lizen
 cp /usr/share/doc/mingw-w64-common/copyright "$tree/Lizenzen/MinGW-w64.txt"
 (cd "$tree" && zip -q -X -r "$stage/$archive" .)
 mv "$stage/$archive" "$out/$archive"
-sha256sum "$out/$archive"
+(cd "$out" && sha256sum "$archive" | tee SHA256SUMS)
+echo "$out/$archive" >&3

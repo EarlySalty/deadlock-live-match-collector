@@ -20,11 +20,19 @@ jobs:
           sudo apt-get install -y gcc-mingw-w64-x86-64
           rustup target add x86_64-pc-windows-gnu
       - name: Test and package
+        id: package
         run: |
           cargo test --locked
-          packaging/package-win64.sh
-          (cd dist && sha256sum ./*.zip > SHA256SUMS)
+          archive=$(packaging/package-win64.sh)
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
       - name: Scan the packaged Windows executable
-        run: packaging/scan-win64.sh
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: packaging/scan-win64.sh "$ARCHIVE"
       - name: List the package
-        run: unzip -l dist/*.zip
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          unzip -l "$ARCHIVE"
+          (cd dist && sha256sum --check SHA256SUMS)
+          ls -l dist
