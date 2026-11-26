@@ -93,7 +93,7 @@ fn payload(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Payload> {
     // Nur der direkt uebertragene Midboss-Timer darf als verifiziert gelten.
     let midboss = (s.game_mode == Some(GameMode::Normal))
         .then_some(())
-        .and_then(|_| s.timers.midboss.as_ref())
+        .and(s.timers.midboss.as_ref())
         .and_then(|timer| {
             if timer.source != TimerSource::Game {
                 return None;
