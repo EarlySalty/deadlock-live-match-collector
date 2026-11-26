@@ -14,19 +14,24 @@ gh attestation verify dist/live-match-collector.exe --repo "$GITHUB_REPOSITORY" 
 python3 packaging/release_checks.py tag
 python3 packaging/release_checks.py ci
 release_flags=()
-notes=packaging/release-notes.md
+notes=$(mktemp)
+trap 'rm -f "$notes"' EXIT
+cp packaging/release-notes.md "$notes"
+report_assets=()
+if [[ -f dist/virustotal-report.md ]]; then
+  printf '\n' >> "$notes"
+  cat dist/virustotal-report.md >> "$notes"
+  report_assets=(dist/virustotal-report.md)
+fi
 case "${RELEASE_MODE:-stable}" in
   stable) python3 packaging/release_checks.py preflight ;;
   prerelease)
     release_flags=(--prerelease --latest=false)
-    notes=$(mktemp)
-    trap 'rm -f "$notes"' EXIT
-    printf '%s\n\n' '**Pre-release: the production API may not be deployed yet. Do not use for real matches until the backend and permitted game access are confirmed.**' > "$notes"
-    cat packaging/release-notes.md >> "$notes"
+    printf '\n%s\n' '**Pre-release: the production API may not be deployed yet. Do not use for real matches until the backend and permitted game access are confirmed.**' >> "$notes"
     ;;
   *) echo 'Invalid release mode' >&2; exit 2 ;;
 esac
 gh release create "$RELEASE_TAG" --draft --verify-tag "${release_flags[@]}" --title "$RELEASE_TAG" \
   --notes-file "$notes" "$archive" dist/SHA256SUMS \
   dist/live-match-collector.exe dist/SHA256SUMS.exe \
-  dist/clamav-report.txt dist/build-environment.txt
+  dist/clamav-report.txt dist/build-environment.txt "${report_assets[@]}"

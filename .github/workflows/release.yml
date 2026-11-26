@@ -95,6 +95,16 @@ jobs:
       - name: Test, package, scan and verify
         id: package
         run: bash packaging/build-checks.sh
+      - name: VirusTotal report for the exact packaged EXE
+        env:
+          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+        run: |
+          result=0
+          python3 packaging/virustotal_report.py dist || result=$?
+          if [[ -f dist/virustotal-report.md ]]; then
+            cat dist/virustotal-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$result"
       - name: Attest the ZIP and EXE
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:

@@ -1,4 +1,4 @@
-## Deadlock Live Match Collector 0.2.0
+## Deadlock Live Match Collector 0.2.1
 
 Windows x64, direkte HTTPS-Verbindung zum Twitch-Bot über API v3 / Upload-Schema 3. Kein lokaler Proxy, keine Test-CA. Lade bevorzugt das ZIP mit Anleitung und Drittanbieterhinweisen herunter; die separat angebotene EXE ist bytegleich. Vergleiche die SHA-256-Prüfsummen. Der Quellcode, die Tests und die Build-Herkunft sind auf GitHub einsehbar; die Attestation lässt sich mit `gh attestation verify <Datei> --repo EarlySalty/deadlock-live-match-collector` prüfen.
 

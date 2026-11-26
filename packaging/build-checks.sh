@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-python3 -B -m unittest discover -s packaging -p 'test_release_checks.py'
+python3 -B -m unittest discover -s packaging -p 'test_*.py'
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked

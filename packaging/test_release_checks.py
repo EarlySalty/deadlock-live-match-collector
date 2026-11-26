@@ -215,7 +215,7 @@ class DraftTests(unittest.TestCase):
                 stub.chmod(0o755)
             env = dict(os.environ, PATH=str(root / "bin") + ":" + os.environ["PATH"],
                        RELEASE_TAG="v0.2.0", GITHUB_SHA=SHA, GITHUB_REPOSITORY=REPO,
-                       MOCK_LOG=str(log), MOCK_FAIL="")
+                       MOCK_LOG=str(log), MOCK_FAIL="", RELEASE_MODE="stable")
             for fail in ("attestation verify", "release_checks.py tag", "release_checks.py ci",
                          "release_checks.py preflight", ""):
                 with self.subTest(fail=fail):

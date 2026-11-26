@@ -1,4 +1,4 @@
-Deadlock Live Match Collector 0.2.0 – direkte HTTPS-Verbindung (Windows x64)
+Deadlock Live Match Collector 0.2.1 – direkte HTTPS-Verbindung (Windows x64)
 
 Endpunkt: https://deutsche-deadlock-community.de/twitch/api/v3/live-match
 API v3, Upload-Schema 3. Kein lokaler Proxy, keine test-ca.pem erforderlich.
