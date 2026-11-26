@@ -1,0 +1,52 @@
+name: VirusTotal exact development candidate
+on:
+  push:
+    branches: [audit/virustotal-exact-3ab95ccb]
+permissions:
+  contents: read
+concurrency:
+  group: vt-exact-3ab95ccb
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 36c4a8576740c36daa3548012e466e23631089c4
+          persist-credentials: false
+      - name: Rebuild reviewed source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 36c4a8576740c36daa3548012e466e23631089c4
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+          bash packaging/package-win64.sh
+      - name: Verify authorized exact EXE
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' 3ab95ccb798d7cf93b9b8b1db72646376c3ccf8bbe4ad14064660e4be7a0e111 dist/live-match-collector.exe | sha256sum -c -
+          python3 -B packaging/check_pe.py dist/live-match-collector.exe
+      - name: Submit exact EXE and retrieve VirusTotal evidence
+        env:
+          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+          VT_ALLOW_UPLOAD: 'true'
+        run: |
+          status=0
+          python3 -B packaging/virustotal_report.py dist || status=$?
+          if [[ -f dist/virustotal-report.md ]]; then
+            cat dist/virustotal-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+      - name: Retain text-only scan evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: vt-exact-candidate-${{ github.run_id }}
+          path: |
+            dist/SHA256SUMS.exe
+            dist/virustotal-report.json
+            dist/virustotal-report.md
+          if-no-files-found: warn
+          retention-days: 90
