@@ -2,6 +2,8 @@
 //! Public DTO and source interfaces do not authorize a live provider.
 pub mod game_model;
 pub mod game_source;
+#[cfg(test)]
+mod hud_source;
 pub mod independent_source;
 pub mod limits;
 #[cfg(test)]
