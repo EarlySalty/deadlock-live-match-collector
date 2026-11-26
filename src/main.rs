@@ -1,16 +1,18 @@
+mod game_model;
+mod game_source;
+mod independent_source;
 mod limits;
-mod local_assets;
 mod telemetry;
 
 use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
 use std::mem::discriminant;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
-use deadlock_data::HeroCatalog;
-use deadlock_reader::snapshot::{Context, LiveSnapshot, Perspective};
-use deadlock_reader::supervise::{Attached, ReaderSupervisor};
+use game_model::{Eligibility, GameSnapshot, MatchContext, Provenance};
+use game_source::{GameSource, SourceError};
+use independent_source::BlockedSource;
 use reqwest::blocking::Client;
 use serde::Serialize;
 
@@ -97,12 +99,11 @@ fn next_counter(value: u64) -> Result<u64, Status> {
 #[derive(Debug, Clone, PartialEq)]
 enum Status {
     Waiting,
-    Blocked(String),
+    Blocked,
     ReadFailed,
     Outdated,
     Excluded,
     Unreadable,
-    AssetsUnavailable,
     EpochExpired,
     OldMatch,
     CounterExhausted,
@@ -122,7 +123,7 @@ impl Status {
             | Status::EpochExpired
             | Status::OldMatch
             | Status::CounterExhausted => 1,
-            Status::Rejected(_) | Status::Unreachable | Status::Blocked(_) => 3,
+            Status::Rejected(_) | Status::Unreachable | Status::Blocked => 3,
             _ => 5,
         }
     }
@@ -138,12 +139,11 @@ impl Status {
     fn message(&self) -> String {
         match self {
             Status::Waiting => "Warte auf ein laufendes Deadlock-Match.".to_owned(),
-            Status::Blocked(reason) => format!("Deadlock konnte nicht geöffnet werden: {reason}. Bitte Spiel und Zugriffsrechte prüfen."),
+            Status::Blocked => "Keine autorisierte Deadlock-Live-Datenquelle verfügbar. Es wird nichts übertragen.".to_owned(),
             Status::ReadFailed => "Deadlock läuft, aber die Spieldaten lassen sich gerade nicht lesen. Es wird weiter versucht. Bleibt das so, prüfe, ob es eine neuere Version des Collectors gibt.".to_owned(),
             Status::Outdated => "Deadlock hat sich seit dieser Programmversion verändert. Es wird nichts übertragen. Prüfe, ob es eine neuere Version des Collectors gibt.".to_owned(),
             Status::Excluded => "Für dieses Match lädt Deadlock selbst keine Statistiken hoch. Der Collector sendet deshalb nichts.".to_owned(),
             Status::Unreadable => "Match erkannt, aber die Spieldaten sind nicht vollständig lesbar. Solange wird nichts übertragen.".to_owned(),
-            Status::AssetsUnavailable => "Die lokalen Deadlock-Spieldaten konnten nicht gelesen werden. Es wird nichts gesendet. Prüfe die Spielinstallation und die Collector-Version.".to_owned(),
             Status::InvalidBody => "Die Live-Daten konnten nicht als JSON erstellt werden. Es wird nichts gesendet.".to_owned(),
             Status::BodyTooLarge => format!("Die Live-Daten überschreiten die zulässige Größe von {} Bytes. Es wird nichts gesendet.", limits::BODY_BYTES),
             Status::EpochExpired => "Die Übertragung dieses Matches ist abgelaufen. Der Collector wartet mit demselben Schlüssel auf das nächste Match.".to_owned(),
@@ -191,79 +191,43 @@ impl Announcer {
     }
 }
 
-fn in_match(s: &LiveSnapshot) -> bool {
-    s.context == Context::Match
-        && s.perspective == Perspective::Playing
-        && s.game_state.is_some_and(|state| state.is_live())
-}
-
-fn prepare(
-    snapshot: Option<&LiveSnapshot>,
-    heroes: &HeroCatalog,
-    writer: &mut Writer,
-) -> Result<Observation, Status> {
+fn prepare(snapshot: Option<&GameSnapshot>, writer: &mut Writer) -> Result<Observation, Status> {
     let Some(s) = snapshot else {
         return Err(Status::Waiting);
     };
-    if !s.drift.is_empty() {
-        return Err(Status::Outdated);
+    if s.provenance != Provenance::Authorized
+        && !(cfg!(test) && s.provenance == Provenance::Synthetic)
+    {
+        return Err(Status::Blocked);
     }
-    if !in_match(s) {
+    if s.context != MatchContext::LivePlaying {
         return Err(Status::Waiting);
     }
-    let id = s.match_id.filter(|id| *id > 0);
-    if let Some(id) = id {
-        writer.observe(id)?;
+    let id = s
+        .match_token
+        .filter(|id| *id > 0)
+        .ok_or(Status::Unreadable)?;
+    writer.observe(id)?;
+    match s.eligibility {
+        Eligibility::Eligible => {}
+        Eligibility::Excluded => return Err(Status::Excluded),
+        Eligibility::Unknown => return Err(Status::Unreadable),
     }
-    if s.dont_upload_stats == Some(true) {
-        return Err(Status::Excluded);
-    }
-    if id.is_none() {
-        return Err(Status::Unreadable);
-    }
-    if heroes.is_empty() {
-        return Err(Status::AssetsUnavailable);
-    }
-    telemetry::observation(s, heroes).ok_or(Status::Unreadable)
+    telemetry::observation(s).ok_or(Status::Unreadable)
 }
 
-fn attach_error(previous: Option<String>, attached: &Attached) -> Option<String> {
-    match attached {
-        Attached::Failed(reason) => Some(reason.clone()),
-        Attached::Waiting => previous,
-        _ => None,
+fn source_status(error: SourceError) -> Status {
+    match error {
+        SourceError::Unavailable => Status::ReadFailed,
+        SourceError::Unauthorized => Status::Blocked,
+        SourceError::Incompatible => Status::Outdated,
+        SourceError::InvalidSample => Status::Unreadable,
     }
 }
 
-fn read(
-    supervisor: &mut ReaderSupervisor,
-    blocked: &mut Option<String>,
-    assets: &mut local_assets::LocalAssets,
-    writer: &mut Writer,
-) -> Result<Observation, Status> {
-    let attached = supervisor.acquire();
-    *blocked = attach_error(blocked.take(), &attached);
-    let fresh_attach = matches!(&attached, Attached::Fresh(_));
-    let reader = match attached {
-        Attached::Fresh(reader) | Attached::Held(reader) => reader,
-        _ => {
-            assets.clear();
-            return Err(blocked.clone().map_or(Status::Waiting, Status::Blocked));
-        }
-    };
-    assets.refresh(reader.game_dir(), fresh_attach, Instant::now());
-    match reader.live_snapshot() {
-        Ok(snapshot) => {
-            supervisor.succeeded();
-            prepare(snapshot.as_ref(), assets.catalog(), writer)
-        }
-        Err(_) => {
-            if supervisor.failed() {
-                assets.clear();
-            }
-            Err(Status::ReadFailed)
-        }
-    }
+fn read(source: &mut impl GameSource, writer: &mut Writer) -> Result<Observation, Status> {
+    let sample = source.poll().map_err(source_status)?;
+    prepare(sample.as_ref(), writer)
 }
 
 const UNREADABLE_KEY: &str = "Der Verbindungsschlüssel konnte nicht gelesen werden.";
@@ -485,6 +449,12 @@ fn run() {
             2,
         );
     }
+    // No source can be opened until the authorization and field-coverage gate is met.
+    // Fail before asking for a key, creating an HTTP client or contacting any server.
+    let mut source = match BlockedSource::open() {
+        Ok(source) => source,
+        Err(error) => leave(&source_status(error).message(), 1),
+    };
     let token = match read_token() {
         Ok(token) => token,
         Err(reason) => leave(reason, 1),
@@ -517,15 +487,12 @@ fn run() {
             1,
         ),
     };
-    let mut assets = local_assets::LocalAssets::default();
-    let mut supervisor = ReaderSupervisor::new(PERIOD);
     let mut announcer = Announcer::new();
-    let mut blocked = None;
     let mut pacing = RetryPacing::new();
     let mut writer = Writer::new();
     eprintln!("Warte auf ein laufendes Deadlock-Match. Beenden mit Strg+C.");
     loop {
-        let (status, hint) = match read(&mut supervisor, &mut blocked, &mut assets, &mut writer) {
+        let (status, hint) = match read(&mut source, &mut writer) {
             Ok(observation) => match writer.packet(observation) {
                 Ok(data) => match upload(&client, ENDPOINT, &token, &data) {
                     Ok((Status::EpochExpired, hint)) => {
@@ -551,34 +518,32 @@ fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deadlock_core::{HeroId, Team};
-    use deadlock_reader::snapshot::{GameMode, GameState, MatchClock, PlayerRow};
-    use deadlock_reader::timers::{ObjectiveTimer, TimerSource};
-    use deadlock_reader::Drift;
+    use game_model::{
+        AbilityUpgrade, GameMode, ObjectiveTimer, PlayerSample, StructureKind, StructureSample,
+        StructureState, Team, TeamSample, TimerSource,
+    };
+    use game_source::SyntheticSource;
     use serde_json::{json, Value};
 
-    fn snapshot() -> LiveSnapshot {
-        LiveSnapshot {
-            match_id: Some(123),
+    fn snapshot() -> GameSnapshot {
+        GameSnapshot {
+            match_token: Some(123),
             expected_player_count: Some(2),
-            context: Context::Match,
-            perspective: Perspective::Playing,
-            game_state: Some(GameState::GameInProgress),
+            context: MatchContext::LivePlaying,
+            eligibility: Eligibility::Eligible,
+            provenance: Provenance::Synthetic,
             game_mode: Some(GameMode::Normal),
-            clock: MatchClock {
-                game_start_time: Some(10.0),
-                now: Some(52.8),
-                ..Default::default()
-            },
+            playing_seconds: Some(42.8),
+            local_hero_name: Some("Infernus".to_owned()),
             players: vec![
-                PlayerRow {
+                PlayerSample {
                     is_local: Some(true),
-                    team: Some(Team::AMBER),
-                    hero_id: Some(HeroId(1)),
+                    team: Some(Team::Own),
+                    hero_id: Some(1),
                     ..Default::default()
                 },
-                PlayerRow {
-                    team: Some(Team::SAPPHIRE),
+                PlayerSample {
+                    team: Some(Team::Enemy),
                     ..Default::default()
                 },
             ],
@@ -586,12 +551,8 @@ mod tests {
         }
     }
 
-    fn observation(s: &LiveSnapshot) -> Result<Observation, Status> {
-        prepare(
-            Some(s),
-            &local_assets::synthetic_catalog(),
-            &mut Writer::new(),
-        )
+    fn observation(s: &GameSnapshot) -> Result<Observation, Status> {
+        prepare(Some(s), &mut Writer::new())
     }
 
     fn timer(source: TimerSource, present: bool, seconds: f32) -> ObjectiveTimer {
@@ -603,8 +564,8 @@ mod tests {
         }
     }
 
-    fn packet(s: &LiveSnapshot, writer: &mut Writer) -> Value {
-        let sample = prepare(Some(s), &local_assets::synthetic_catalog(), writer).unwrap();
+    fn packet(s: &GameSnapshot, writer: &mut Writer) -> Value {
+        let sample = prepare(Some(s), writer).unwrap();
         let data = writer.packet(sample).unwrap();
         serde_json::from_slice(&encode_body(&data).unwrap()).unwrap()
     }
@@ -622,18 +583,18 @@ mod tests {
         for key in ["kills", "deaths", "assists", "team_souls", "enemy_souls"] {
             assert!(first[key].is_null());
         }
-        s.match_id = Some(987654321);
+        s.match_token = Some(987654321);
         s.players[0].kills = Some(990);
         s.players[0].deaths = Some(991);
         s.players[0].assists = Some(992);
-        s.players[0].net_worth = Some(999_999);
+        s.players[0].souls = Some(999_999);
         s.players[0].items = Some(vec![123456789]);
         s.players[0].hero_damage = Some(1234);
-        s.players[1].hero_id = Some(HeroId(2));
+        s.players[1].hero_id = Some(2);
         s.players[1].slot = Some(7);
         s.players[1].level = Some(42);
-        s.players[1].is_alive = Some(true);
-        s.players[1].net_worth = Some(888_888);
+        s.players[1].alive = Some(true);
+        s.players[1].souls = Some(888_888);
         s.players[1].hero_damage = Some(123456789);
         s.players[1].items = Some(vec![987654321]);
         s.paused = Some(false);
@@ -779,33 +740,21 @@ mod tests {
         let mut s = snapshot();
         let first = packet(&s, &mut writer);
         writer.expire_current();
-        assert_eq!(
-            prepare(Some(&s), &local_assets::synthetic_catalog(), &mut writer),
-            Err(Status::EpochExpired)
-        );
-        s.clock.now = Some(99.0);
-        assert_eq!(
-            prepare(Some(&s), &local_assets::synthetic_catalog(), &mut writer),
-            Err(Status::EpochExpired)
-        );
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::EpochExpired));
+        s.playing_seconds = Some(89.0);
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::EpochExpired));
         assert_eq!(writer.sequence, 1);
-        s.match_id = Some(456);
+        s.match_token = Some(456);
         let next = packet(&s, &mut writer);
         assert_eq!(next["writer_id"], first["writer_id"]);
         assert_eq!(next["sequence"], 2);
         assert_eq!(next["match_epoch"], 2);
-        s.match_id = Some(123);
-        assert_eq!(
-            prepare(Some(&s), &local_assets::synthetic_catalog(), &mut writer),
-            Err(Status::OldMatch)
-        );
+        s.match_token = Some(123);
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::OldMatch));
     }
 
     #[test]
     fn expanded_maximum_payload_and_unknown_team_values() {
-        use deadlock_reader::snapshot::{
-            AbilityUpgrade, Objective, ObjectiveKind, StructureState, TeamStats,
-        };
         let mut s = snapshot();
         s.expected_player_count = Some(12);
         let base = s.players[1].clone();
@@ -813,11 +762,11 @@ mod tests {
             s.players.push(base.clone());
         }
         for (i, row) in s.players.iter_mut().enumerate() {
-            row.team = Some(if i < 6 { Team::AMBER } else { Team::SAPPHIRE });
+            row.team = Some(if i < 6 { Team::Own } else { Team::Enemy });
             row.slot = Some((i + 1) as u32);
-            row.hero_id = Some(HeroId(if i == 0 { 1 } else { u32::MAX }));
+            row.hero_id = Some(if i == 0 { 1 } else { u32::MAX });
             row.level = Some(limits::LEVEL);
-            row.net_worth = Some(limits::SOULS / 6);
+            row.souls = Some(limits::SOULS / 6);
             row.kills = Some(limits::SUMMARY_SCORE);
             row.deaths = Some(limits::SUMMARY_SCORE);
             row.assists = Some(limits::SUMMARY_SCORE);
@@ -826,14 +775,13 @@ mod tests {
             row.hero_damage = Some(limits::STAT);
             row.objective_damage = Some(limits::STAT);
             row.healing = Some(limits::STAT);
-            row.is_alive = Some(true);
+            row.alive = Some(true);
         }
         let local = &mut s.players[0];
         local.items = Some(vec![u32::MAX; limits::ITEMS]);
         local.ability_upgrades = Some(vec![
             AbilityUpgrade {
                 item_id: u32::MAX,
-                raw: 0,
                 unlocked: true,
                 points: limits::ABILITY_POINTS
             };
@@ -848,39 +796,27 @@ mod tests {
         local.neutral_souls = Some(limits::STAT);
         local.farm_baseline = Some(limits::STAT);
         local.kill_streak = Some(limits::STAT);
-        s.teams = [Team::AMBER, Team::SAPPHIRE]
+        s.teams = [Team::Own, Team::Enemy]
             .into_iter()
-            .map(|team| TeamStats {
+            .map(|team| TeamSample {
                 team,
-                players: 6,
                 complete: true,
-                structures_known: true,
-                structures_alive: 128,
-                souls: limits::SOULS,
-                ability_points: limits::STAT,
-                kills: 6000,
-                deaths: 6000,
-                assists: 6000,
-                last_hits: limits::STAT,
-                denies: limits::STAT,
-                hero_damage: limits::STAT,
-                objective_damage: limits::STAT,
-                healing: limits::STAT,
+                structures_alive: Some(128),
+                ability_points: Some(limits::STAT),
+                last_hits: Some(limits::STAT),
+                denies: Some(limits::STAT),
+                hero_damage: Some(limits::STAT),
+                objective_damage: Some(limits::STAT),
+                healing: Some(limits::STAT),
                 rejuvenators: Some(1000),
-                score: None,
             })
             .collect();
-        s.objectives = (0..limits::STRUCTURE_ROWS)
-            .map(|_| Objective {
-                kind: ObjectiveKind::Guardian,
-                team: Some(Team::AMBER),
+        s.structures = (0..limits::STRUCTURE_ROWS)
+            .map(|_| StructureSample {
+                kind: StructureKind::Guardian,
+                team: Some(Team::Own),
                 lane: Some(8),
                 state: StructureState::Standing,
-                team_name: None,
-                class: String::new(),
-                address: 0,
-                health: None,
-                max_health: None,
             })
             .collect();
         s.timers.midboss = Some(timer(TimerSource::Game, false, 7200.0));
@@ -944,7 +880,7 @@ mod tests {
         let size = bytes.len();
         eprintln!("Extended synthetic maximal shape: {size} bytes");
         assert!(size < limits::BODY_BYTES);
-        s.players[1].net_worth = None;
+        s.players[1].souls = None;
         s.teams[0].complete = false;
         let partial = packet(&s, &mut writer);
         assert!(partial["team_souls"].is_null());
@@ -954,22 +890,22 @@ mod tests {
     }
 
     #[test]
-    fn missing_or_unlocalized_catalog_cannot_create_upload() {
+    fn missing_or_invalid_hero_name_cannot_create_upload() {
         let mut writer = Writer::new();
-        let s = snapshot();
-        assert_eq!(
-            prepare(Some(&s), &HeroCatalog::default(), &mut writer),
-            Err(Status::AssetsUnavailable)
-        );
-        let unlocalized = HeroCatalog::new(local_assets::synthetic_catalog().all().to_vec());
-        assert_eq!(
-            prepare(Some(&s), &unlocalized, &mut writer),
-            Err(Status::Unreadable)
-        );
-        assert_eq!(writer.sequence, 0);
-        let sample = prepare(Some(&s), &local_assets::synthetic_catalog(), &mut writer).unwrap();
-        let data = writer.packet(sample).unwrap();
-        let body: Value = serde_json::from_slice(&encode_body(&data).unwrap()).unwrap();
+        let mut s = snapshot();
+        for name in [
+            None,
+            Some(String::new()),
+            Some("   ".into()),
+            Some("x\ny".into()),
+            Some("ü".repeat(41)),
+        ] {
+            s.local_hero_name = name;
+            assert_eq!(prepare(Some(&s), &mut writer), Err(Status::Unreadable));
+            assert_eq!(writer.sequence, 0);
+        }
+        s.local_hero_name = Some(" Infernus ".into());
+        let body = packet(&s, &mut writer);
         assert_eq!(body["hero"], "Infernus");
         assert_eq!(body["sequence"], 1);
         assert_eq!(body["match_epoch"], 1);
@@ -979,11 +915,10 @@ mod tests {
     fn local_eligibility_and_roster_still_fail_closed_without_scores() {
         assert!(observation(&snapshot()).is_ok());
         let mut s = snapshot();
-        s.perspective = Perspective::Spectating;
+        s.context = MatchContext::Other;
         assert_eq!(observation(&s), Err(Status::Waiting));
         let mut s = snapshot();
         s.players[0].is_local = Some(false);
-        s.players[0].is_observed = true;
         assert_eq!(observation(&s), Err(Status::Unreadable));
         let mut s = snapshot();
         s.players[1].is_local = Some(true);
@@ -992,36 +927,30 @@ mod tests {
         s.players[0].is_spectator = true;
         assert_eq!(observation(&s), Err(Status::Unreadable));
         let mut s = snapshot();
-        s.match_id = Some(0);
+        s.match_token = Some(0);
         assert_eq!(observation(&s), Err(Status::Unreadable));
         let mut s = snapshot();
         for expected in [None, Some(0), Some(12), Some(u32::MAX)] {
             s.expected_player_count = expected;
             assert_eq!(observation(&s), Err(Status::Unreadable));
         }
-        for invalid in [
-            None,
-            Some(Team::NEUTRAL),
-            Some(Team::SPECTATOR),
-            Some(Team::AMBER),
-        ] {
+        for invalid in [None, Some(Team::Unknown), Some(Team::Own)] {
             let mut s = snapshot();
             s.players[1].team = invalid;
             assert_eq!(observation(&s), Err(Status::Unreadable));
         }
         let mut s = snapshot();
         s.players[1].is_spectator = true;
-        assert_eq!(s.scoreboard().count(), 2);
         assert_eq!(observation(&s), Err(Status::Unreadable));
         s.players[1].is_spectator = false;
         assert!(observation(&s).is_ok());
-        for hero in [None, Some(HeroId(0)), Some(HeroId(u32::MAX))] {
+        for hero in [None, Some(0)] {
             s.players[0].hero_id = hero;
             assert_eq!(observation(&s), Err(Status::Unreadable));
         }
         let mut s = snapshot();
-        for now in [None, Some(f32::NAN), Some(f32::INFINITY), Some(86_411.0)] {
-            s.clock.now = now;
+        for now in [None, Some(f32::NAN), Some(f32::INFINITY), Some(86_401.0)] {
+            s.playing_seconds = now;
             assert_eq!(observation(&s), Err(Status::Unreadable));
         }
     }
@@ -1039,9 +968,7 @@ mod tests {
         );
         s.paused = Some(true);
         let paused = packet(&s, &mut writer);
-        s.clock.now = Some(62.8);
-        s.clock.total_paused_ticks = Some((10.0 * s.clock.tick_rate) as u32);
-        s.clock.raw_update_tick = Some(900);
+        s.playing_seconds = Some(42.8);
         let unchanged = packet(&s, &mut writer);
         assert_eq!(paused["game_seconds"], unchanged["game_seconds"]);
         assert_eq!(paused["paused"], unchanged["paused"]);
@@ -1081,34 +1008,27 @@ mod tests {
 
     #[test]
     fn writer_epoch_sequence_survive_detach_timeout_and_reject_old_match() {
-        let heroes = local_assets::synthetic_catalog();
         let mut writer = Writer::new();
         let mut s = snapshot();
         let first = packet(&s, &mut writer);
         assert_eq!(first["sequence"], 1);
         assert_eq!(first["match_epoch"], 1);
-        assert_eq!(prepare(None, &heroes, &mut writer), Err(Status::Waiting));
+        assert_eq!(prepare(None, &mut writer), Err(Status::Waiting));
         let next = packet(&s, &mut writer);
         assert_eq!(next["sequence"], 2);
         assert_eq!(next["match_epoch"], 1);
         assert_eq!(next["writer_id"], first["writer_id"]);
-        s.match_id = Some(456);
+        s.match_token = Some(456);
         s.players[0].hero_id = None;
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut writer),
-            Err(Status::Unreadable)
-        );
-        s.players[0].hero_id = Some(HeroId(1));
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::Unreadable));
+        s.players[0].hero_id = Some(1);
         let new = packet(&s, &mut writer);
         assert_eq!(new["sequence"], 3);
         assert_eq!(new["match_epoch"], 2);
-        s.match_id = Some(123);
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut writer),
-            Err(Status::OldMatch)
-        );
+        s.match_token = Some(123);
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::OldMatch));
         assert_eq!(writer.sequence, 3);
-        s.match_id = Some(456);
+        s.match_token = Some(456);
         let latest = packet(&s, &mut writer);
         assert_eq!(latest["sequence"], 4);
         assert_eq!(latest["match_epoch"], 2);
@@ -1124,12 +1044,12 @@ mod tests {
         }
         writer.sequence = limits::MAX_COUNTER - 1;
         assert_eq!(packet(&s, &mut writer)["sequence"], limits::MAX_COUNTER);
-        let sample = prepare(Some(&s), &heroes, &mut writer).unwrap();
+        let sample = prepare(Some(&s), &mut writer).unwrap();
         assert_eq!(writer.packet(sample), Err(Status::CounterExhausted));
         writer.epoch = limits::MAX_COUNTER;
-        s.match_id = Some(789);
+        s.match_token = Some(789);
         assert_eq!(
-            prepare(Some(&s), &heroes, &mut writer),
+            prepare(Some(&s), &mut writer),
             Err(Status::CounterExhausted)
         );
         assert_eq!(writer.epoch, limits::MAX_COUNTER);
@@ -1309,8 +1229,8 @@ mod tests {
         body
     }
 
-    fn next_test_payload(writer: &mut Writer, s: &LiveSnapshot) -> Payload {
-        let observation = prepare(Some(s), &local_assets::synthetic_catalog(), writer).unwrap();
+    fn next_test_payload(writer: &mut Writer, s: &GameSnapshot) -> Payload {
+        let observation = prepare(Some(s), writer).unwrap();
         writer.packet(observation).unwrap()
     }
 
@@ -1460,7 +1380,7 @@ mod tests {
         let result = upload(&client, &endpoint, "synthetic-test-only", &first);
         release.send(()).unwrap();
         assert_eq!(result, Ok((Status::Unreachable, None)));
-        s.clock.now = Some(55.8);
+        s.playing_seconds = Some(45.8);
         let second = next_test_payload(&mut writer, &s);
         assert_eq!(
             upload(&client, &endpoint, "synthetic-test-only", &second),
@@ -1471,35 +1391,22 @@ mod tests {
 
     #[test]
     fn excluded_or_incomplete_new_match_cannot_reopen_an_older_epoch() {
-        let heroes = local_assets::synthetic_catalog();
         let mut writer = Writer::new();
         let mut s = snapshot();
         assert_eq!(packet(&s, &mut writer)["match_epoch"], 1);
-        s.match_id = Some(456);
-        s.dont_upload_stats = Some(true);
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut writer),
-            Err(Status::Excluded)
-        );
-        s.match_id = Some(123);
-        s.dont_upload_stats = Some(false);
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut writer),
-            Err(Status::OldMatch)
-        );
-        s.match_id = Some(789);
+        s.match_token = Some(456);
+        s.eligibility = Eligibility::Excluded;
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::Excluded));
+        s.match_token = Some(123);
+        s.eligibility = Eligibility::Eligible;
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::OldMatch));
+        s.match_token = Some(789);
         s.players.clear();
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut writer),
-            Err(Status::Unreadable)
-        );
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::Unreadable));
         let mut s = snapshot();
-        s.match_id = Some(456);
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut writer),
-            Err(Status::OldMatch)
-        );
-        s.match_id = Some(789);
+        s.match_token = Some(456);
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::OldMatch));
+        s.match_token = Some(789);
         let new = packet(&s, &mut writer);
         assert_eq!(new["match_epoch"], 3);
         assert_eq!(new["sequence"], 2);
@@ -1545,67 +1452,60 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_reports_detach_and_clears_consecutive_failures() {
-        let mut supervisor = ReaderSupervisor::new(PERIOD);
-        assert!(!supervisor.failed());
-        assert!(supervisor.consecutive_failures() > 0);
-        supervisor.succeeded();
-        assert_eq!(supervisor.consecutive_failures(), 0);
-        assert!(
-            (0..128).any(|_| supervisor.failed()),
-            "reader never reported detachment within the test budget"
-        );
-        assert_eq!(supervisor.consecutive_failures(), 0);
-        assert!(!supervisor.failed());
+    fn source_error_and_detach_never_replay_previous_sample() {
+        let mut writer = Writer::new();
+        let mut source = SyntheticSource::new(vec![
+            Ok(Some(snapshot())),
+            Err(SourceError::Unavailable),
+            Ok(None),
+            Err(SourceError::Incompatible),
+            Err(SourceError::InvalidSample),
+            Err(SourceError::Unauthorized),
+            Ok(Some(snapshot())),
+        ]);
+        assert!(read(&mut source, &mut writer).is_ok());
+        for expected in [
+            Status::ReadFailed,
+            Status::Waiting,
+            Status::Outdated,
+            Status::Unreadable,
+            Status::Blocked,
+        ] {
+            assert_eq!(read(&mut source, &mut writer), Err(expected));
+        }
+        assert!(read(&mut source, &mut writer).is_ok());
+        assert_eq!(writer.epoch, 1);
+        assert_eq!(read(&mut source, &mut writer), Err(Status::Waiting));
     }
 
     #[test]
     fn names_the_reason_when_nothing_is_sent() {
-        let heroes = local_assets::synthetic_catalog();
-        assert_eq!(
-            prepare(None, &heroes, &mut Writer::new()),
-            Err(Status::Waiting)
-        );
+        assert_eq!(prepare(None, &mut Writer::new()), Err(Status::Waiting));
         let mut s = snapshot();
         s.players[0].hero_id = None;
         assert_eq!(
-            prepare(Some(&s), &heroes, &mut Writer::new()),
+            prepare(Some(&s), &mut Writer::new()),
             Err(Status::Unreadable)
         );
-        s.dont_upload_stats = Some(true);
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut Writer::new()),
-            Err(Status::Excluded)
-        );
-        s.game_state = Some(GameState::PostGame);
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut Writer::new()),
-            Err(Status::Waiting)
-        );
+        s.eligibility = Eligibility::Excluded;
+        assert_eq!(prepare(Some(&s), &mut Writer::new()), Err(Status::Excluded));
+        s.context = MatchContext::Other;
+        assert_eq!(prepare(Some(&s), &mut Writer::new()), Err(Status::Waiting));
     }
 
     #[test]
     fn any_drift_stops_the_upload_inside_and_outside_a_match() {
-        let heroes = local_assets::synthetic_catalog();
-        let mut s = snapshot();
-        s.drift = vec![Drift::StaleOffset {
-            class: "C_CitadelGameRules".to_owned(),
-            field: "m_bGamePaused".to_owned(),
-        }];
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut Writer::new()),
-            Err(Status::Outdated)
-        );
-        s.game_state = Some(GameState::PostGame);
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut Writer::new()),
-            Err(Status::Outdated)
-        );
-        s.drift.clear();
-        assert_eq!(
-            prepare(Some(&s), &heroes, &mut Writer::new()),
-            Err(Status::Waiting)
-        );
+        let mut writer = Writer::new();
+        let mut source = SyntheticSource::new(vec![
+            Err(SourceError::Incompatible),
+            Err(SourceError::Incompatible),
+            Ok(None),
+        ]);
+        assert_eq!(read(&mut source, &mut writer), Err(Status::Outdated));
+        assert_eq!(read(&mut source, &mut writer), Err(Status::Outdated));
+        assert_eq!(read(&mut source, &mut writer), Err(Status::Waiting));
+        assert_eq!(writer.sequence, 0);
+        assert_eq!(writer.epoch, 0);
     }
 
     #[test]
@@ -1660,23 +1560,69 @@ mod tests {
     }
 
     #[test]
-    fn an_attach_failure_is_kept_until_the_game_opens_or_is_gone() {
-        let reason = "access denied".to_owned();
-        let failed = Attached::Failed(reason.clone());
-        assert_eq!(attach_error(None, &failed), Some(reason.clone()));
-        assert_eq!(
-            attach_error(Some(reason.clone()), &Attached::Waiting),
-            Some(reason.clone())
-        );
-        assert_eq!(attach_error(None, &Attached::Waiting), None);
-        assert_eq!(attach_error(Some(reason.clone()), &Attached::Absent), None);
+    fn authorization_block_has_no_raw_error_or_fallback() {
+        assert!(matches!(
+            BlockedSource::open(),
+            Err(SourceError::Unauthorized)
+        ));
+        let mut source = BlockedSource;
+        let mut writer = Writer::new();
+        for _ in 0..3 {
+            assert_eq!(read(&mut source, &mut writer), Err(Status::Blocked));
+        }
+        assert_eq!(writer.sequence, 0);
+        assert_eq!(writer.epoch, 0);
+        let mut s = snapshot();
+        s.provenance = Provenance::Unknown;
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::Blocked));
+        assert_eq!(writer.epoch, 0);
         let mut announcer = Announcer::new();
-        let blocked = Status::Blocked(reason.clone());
-        assert_eq!(announcer.observe(blocked.clone()), None);
-        assert_eq!(announcer.observe(blocked.clone()), None);
-        let message = announcer.observe(blocked.clone()).unwrap();
-        assert!(message.contains(&reason));
-        assert_eq!(announcer.observe(blocked), None);
+        assert_eq!(announcer.observe(Status::Blocked), None);
+        assert_eq!(announcer.observe(Status::Blocked), None);
+        assert!(announcer
+            .observe(Status::Blocked)
+            .unwrap()
+            .contains("Keine autorisierte"));
+        assert_eq!(announcer.observe(Status::Blocked), None);
+    }
+
+    #[test]
+    fn unknown_eligibility_and_context_never_upload() {
+        let mut s = snapshot();
+        s.eligibility = Eligibility::Unknown;
+        let mut writer = Writer::new();
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::Unreadable));
+        assert_eq!(writer.epoch, 1);
+        assert_eq!(writer.sequence, 0);
+        s.eligibility = Eligibility::Eligible;
+        s.context = MatchContext::Unknown;
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::Waiting));
+        assert_eq!(writer.sequence, 0);
+    }
+
+    #[test]
+    fn missing_name_after_valid_sample_cannot_reuse_cached_name() {
+        let mut writer = Writer::new();
+        let mut invalid = snapshot();
+        invalid.local_hero_name = None;
+        let mut source =
+            SyntheticSource::new(vec![Ok(Some(snapshot())), Ok(Some(invalid)), Ok(None)]);
+        let sample = read(&mut source, &mut writer).unwrap();
+        writer.packet(sample).unwrap();
+        assert_eq!(read(&mut source, &mut writer), Err(Status::Unreadable));
+        assert_eq!(read(&mut source, &mut writer), Err(Status::Waiting));
+        assert_eq!(writer.sequence, 1);
+    }
+
+    #[test]
+    fn unknown_source_cannot_displace_valid_match_epoch() {
+        let mut writer = Writer::new();
+        assert_eq!(packet(&snapshot(), &mut writer)["match_epoch"], 1);
+        let mut s = snapshot();
+        s.provenance = Provenance::Unknown;
+        s.match_token = Some(456);
+        assert_eq!(prepare(Some(&s), &mut writer), Err(Status::Blocked));
+        assert_eq!(packet(&snapshot(), &mut writer)["match_epoch"], 1);
     }
 
     #[test]

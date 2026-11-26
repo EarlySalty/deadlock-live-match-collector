@@ -7,18 +7,12 @@ edition = "2021"
 internal-test = []
 
 [dependencies]
-deadlock-reader = { git = "https://github.com/deadlock-plus/deadlock-rs", rev = "8b408b9103a022e7bac620bfa4916778b8fdfaa1" }
-deadlock-data = { git = "https://github.com/deadlock-plus/deadlock-rs", rev = "8b408b9103a022e7bac620bfa4916778b8fdfaa1", default-features = false, features = ["vpk"] }
-deadlock-core = { git = "https://github.com/deadlock-plus/deadlock-rs", rev = "8b408b9103a022e7bac620bfa4916778b8fdfaa1" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 httpdate = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
-
-[dev-dependencies]
-source2 = { git = "https://github.com/deadlock-plus/source2-rs", rev = "2b73748e7bc8d901cbdbef60d8d68ddaddd3159f", default-features = false, features = ["vpk", "resource", "kv3", "lz4", "zstd"] }
 
 [profile.release]
 strip = true
