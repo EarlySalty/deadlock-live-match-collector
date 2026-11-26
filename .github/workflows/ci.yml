@@ -14,10 +14,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  rust:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [default, all]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        if: success() || failure()
+        run: |
+          args=()
+          if [[ "${{ matrix.features }}" == all ]]; then args+=(--all-features); fi
+          cargo clippy --locked --all-targets "${args[@]}" -- -D warnings
+      - name: Unit, contract, wire and negative CLI tests
+        if: success() || failure()
+        run: |
+          args=()
+          if [[ "${{ matrix.features }}" == all ]]; then args+=(--all-features); fi
+          cargo test --locked --all-targets "${args[@]}"
+  packaging:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - run: python3 -B -m unittest discover -s packaging -p 'test_*.py'
+      - name: Shell syntax
+        if: success() || failure()
+        run: |
+          for script in packaging/*.sh; do bash -n "$script" || exit; done
+  dependency:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -25,32 +62,123 @@ jobs:
         run: |
           mkdir -p dist
           printf 'source=%s\nrun=%s\nattempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > dist/run-evidence.txt
-      - name: Scan committed history for secrets
-        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GITLEAKS_ENABLE_COMMENTS: 'false'
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+      - name: Generate and independently regenerate locked graph
+        run: |
+          python3 -B packaging/dependency_evidence.py dist
+          python3 -B packaging/dependency_evidence.py dist --verify
+      - name: Retain text-only evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: dependency-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            dist/run-evidence.txt
+            dist/dependency-gate.json
+            dist/cargo-sbom.cdx.json
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - name: Audit locked Rust dependencies
         run: |
-          cargo install --locked cargo-audit --version 0.23.0
+          mkdir -p dist
           status=0
-          cargo audit --deny warnings || status=$?
+          cargo install --locked cargo-audit --version 0.23.0 && cargo audit --deny warnings || status=$?
           printf 'cargo-audit-exit=%s\n' "$status" > dist/audit-status.txt
           exit "$status"
+      - name: Retain text-only evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: audit-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            dist/audit-status.txt
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Scan complete fetched history with pinned Gitleaks CLI
+        run: |
+          mkdir -p dist
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' -o "$work/gitleaks.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          printf '%s  %s\n' 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c "$work/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$work/gitleaks.tar.gz" -C "$work" gitleaks
+          "$work/gitleaks" version
+          status=0
+          "$work/gitleaks" git --redact=100 --no-banner --log-opts="--all HEAD" . > "$work/scan.log" 2>&1 || status=$?
+          printf 'gitleaks-exit=%s\n' "$status" > dist/gitleaks-status.txt
+          exit "$status"
+      - name: Retain secret scan status only
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gitleaks-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: error
+          path: dist/gitleaks-status.txt
+  workflow-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate Actions workflows
+        run: |
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' -o "$work/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          printf '%s  %s\n' 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757 "$work/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$work/actionlint.tar.gz" -C "$work" actionlint
+          "$work/actionlint" -color
+  windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Initialize evidence
+        run: |
+          mkdir -p dist
+          printf 'source=%s\nrun=%s\nattempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > dist/run-evidence.txt
       - name: Install Windows build tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y gcc-mingw-w64-x86-64
           rustup show
-      - name: Test, package, scan and verify
+      - name: Build and compare two clean Windows packages
         id: package
-        run: bash packaging/build-checks.sh
-      - name: Retain text-only security evidence (including failures)
+        run: bash packaging/repro-win64.sh
+      - name: ClamAV scan of exact executable
+        if: (success() || failure()) && steps.package.outputs.archive != ''
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: bash packaging/scan-win64.sh "$ARCHIVE"
+      - name: Verify exact scanned package
+        if: success() || failure()
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          test -n "$ARCHIVE"
+          bash packaging/verify-package.sh "$ARCHIVE"
+      - name: Retain text-only evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: security-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 90
           if-no-files-found: error
           path: |
@@ -59,9 +187,16 @@ jobs:
             dist/SHA256SUMS.exe
             dist/Cargo.lock.sha256
             dist/build-environment.txt
-            dist/dependency-gate.json
-            dist/cargo-sbom.cdx.json
+            dist/reproducibility.txt
+            dist/pe-evidence.txt
             dist/clamav-report.txt
-            dist/virustotal-report.json
-            dist/virustotal-report.md
-            dist/audit-status.txt
+  build:
+    if: always()
+    needs: [rust, packaging, dependency, audit, secrets, workflow-lint, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every independent check
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -e 'length == 7 and all(.[]; .result == "success")' <<< "$RESULTS"

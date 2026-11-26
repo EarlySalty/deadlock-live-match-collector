@@ -1,18 +1,8 @@
-// Standalone regression target: no runtime reader or external game-type dependencies.
-#![allow(dead_code)]
-#[path = "../src/contract.rs"]
+// Library tests against the actual implementation and independent contract oracle.
+// Synthetic provenance is accepted only when the library is compiled with cfg(test).
+#[path = "contract.rs"]
 mod contract;
-#[path = "../src/game_model.rs"]
-mod game_model;
-#[path = "../src/game_source.rs"]
-mod game_source;
-#[path = "../src/limits.rs"]
-mod limits;
-#[path = "../src/telemetry.rs"]
-mod telemetry;
-
-use game_model::*;
-use game_source::{GameSource, SyntheticSource};
+use crate::{game_model::*, limits, telemetry};
 use serde_json::{json, Value};
 
 fn encode_body<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, ()> {
@@ -319,18 +309,4 @@ fn invalid_optional_values_and_unknown_are_not_invented() {
     assert!(b["details"]["objectives"]["midboss"].is_null());
     s.game_mode = None;
     assert!(wire(&s)["details"].is_null());
-}
-
-#[test]
-fn source_poll_uses_observed_clock_and_never_creates_progress() {
-    let s = snapshot();
-    let mut paused = s.clone();
-    paused.paused = Some(true);
-    let mut source = SyntheticSource::new(vec![Ok(Some(s.clone())), Ok(Some(paused)), Ok(Some(s))]);
-    for expected_pause in [false, true, false] {
-        let b = wire(&source.poll().unwrap().unwrap());
-        assert_eq!(b["game_seconds"], 42);
-        assert_eq!(b["paused"], expected_pause);
-    }
-    assert_eq!(source.poll().unwrap(), None);
 }

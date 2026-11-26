@@ -1,8 +1,8 @@
 # Deadlock live match collector
 
-Windows x64 console application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. Current integration candidate: no authorized live source is available; startup fails before credential input or network access. The intended HTTPS transport is retained but inactive. Source, tests and pinned dependencies are available for independent inspection; check the release notes for the status of any published build.
+Windows x64 console application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. Current integration candidate: no authorized live source is available; startup fails before credential input or network access. The intended HTTPS transport is retained but inactive. The current source tree is independent of Deadlock Plus; no former reader, assets, or dependency are required. There is **no functioning live collector download** for this development state. Publicly readable source is not a grant of an open-source license; licensing of the collector code is pending an owner decision. Preserve third-party notices.
 
-[German direct setup instructions](packaging/Anleitung-Direkt.txt) · [API v3 / upload schema 3](docs/contract/README.md) · [GitHub releases](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
+[German direct setup instructions](packaging/Anleitung-Direkt.txt) · [API v3 / upload schema 3](docs/contract/README.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 ## Live values
 
@@ -46,10 +46,17 @@ Windows may show SmartScreen for an unsigned executable. Compare the provided SH
 Use the pinned Rust toolchain and Windows x64 build tools:
 ```powershell
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-cargo build --locked --release
-Get-FileHash .\target\release\live-match-collector.exe -Algorithm SHA256
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
+cargo build --locked --release --target x86_64-pc-windows-gnu
+Get-FileHash .\target\x86_64-pc-windows-gnu\release\live-match-collector.exe -Algorithm SHA256
 ```
 
 Public distribution is a separate later step. Preserve third-party notices. Rights to distribute the executable/assets, actual privacy policy, real Windows/game and backend evidence, rule check, soak/outage/rollback, CI/scan/checksum/attestation, protected draft and final publication permission remain on that separate track. No tag, release or public push is necessary for the internal test.
+
+## Development evidence
+
+Linux CI runs independent Rust (default and all features), packaging/contract, locked dependency graph and CycloneDX SBOM, RustSec, Gitleaks, workflow lint, and Windows x64 build/PE/hash/reproducibility/ClamAV checks. `build` is an aggregate required check, not a publisher. CI uploads only selected text evidence, never EXE/ZIP. Two clean cross-builds use the pinned Rust toolchain, locked dependencies and deterministic linker configuration; actual equality and toolchain versions must be checked in the run evidence. A same-runner comparison is not an independently reproduced build. Hosted CI and native Windows behavior must be verified separately.
+
+The earlier, different executable (SHA-256 `89e9ec4fda801a50f0fb8714a70b5dea69af533074482b5834527e56c261b161`) was reported to have four VirusTotal malicious classifications, zero suspicious and 66 undetected. [Historical hash report](https://www.virustotal.com/gui/file/89e9ec4fda801a50f0fb8714a70b5dea69af533074482b5834527e56c261b161). These findings are unresolved, not proven false positives or evidence about new bytes. No new VirusTotal result is claimed. Never disable protection, whitelist a finding simply to pass a gate, or send a binary to an external scanner without explicit permission for its hash.
