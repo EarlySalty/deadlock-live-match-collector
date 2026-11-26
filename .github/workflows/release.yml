@@ -76,6 +76,11 @@ jobs:
         run: |
           mkdir -p dist
           printf 'source=%s\nrun=%s\nattempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > dist/run-evidence.txt
+      # Remove this hard stop only in a separately reviewed commit with an authorized source.
+      - name: Block release while no authorized live source exists
+        run: |
+          echo 'Release blocked: no authorized complete live data source.' >&2
+          exit 1
       - name: Require configured release protections
         env:
           RELEASE_SECURITY_APPROVED: ${{ vars.RELEASE_SECURITY_APPROVED }}
