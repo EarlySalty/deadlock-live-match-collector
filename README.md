@@ -1,8 +1,8 @@
 # Deadlock live match collector
 
-Windows x64 console application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. This is the internal function-test candidate, not a public release.
+Windows x64 console application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. The Windows client connects directly to the community HTTPS API. Source, tests and pinned dependencies are available for independent inspection; check the release notes for the status of any published build.
 
-[German setup instructions](packaging/Anleitung.txt) · [API v3 / upload schema 3](docs/contract/README.md)
+[German direct setup instructions](packaging/Anleitung-Direkt.txt) · [API v3 / upload schema 3](docs/contract/README.md) · [GitHub releases](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
 
 ## Live values
 

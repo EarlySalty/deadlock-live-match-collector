@@ -12,7 +12,7 @@ out="$(pwd)/dist"
 profile=release
 suffix=""
 build_features=()
-guide=packaging/Anleitung.txt
+guide=packaging/Anleitung-Direkt.txt
 purpose=internal-function-test
 case "${1:-}" in
   "")
@@ -24,6 +24,7 @@ case "${1:-}" in
     source_sha=$(git rev-parse HEAD)
     suffix="-internal-${source_sha:0:12}"
     build_features=(--features internal-test)
+    guide=packaging/Anleitung.txt
     if [[ -n "${CARGO_SLOT:-}" ]] || command -v cargo-slot >/dev/null; then
       profile=verify
     else
@@ -98,10 +99,10 @@ find "$tree" -exec touch -d "@$SOURCE_DATE_EPOCH" {} +
 (cd "$tree" && find . -mindepth 1 -type f -print | sort | zip -q -X "$stage/$archive" -@)
 mv "$stage/$archive" "$out/$archive"
 (cd "$out" && sha256sum "$archive" | tee SHA256SUMS)
+unzip -t "$out/$archive"
+unzip -p "$out/$archive" live-match-collector.exe > "$out/live-match-collector.exe"
+(cd "$out" && sha256sum live-match-collector.exe | tee SHA256SUMS.exe && sha256sum -c SHA256SUMS && sha256sum -c SHA256SUMS.exe)
 if [[ "$profile" != release ]]; then
-  unzip -t "$out/$archive"
-  unzip -p "$out/$archive" live-match-collector.exe > "$out/live-match-collector.exe"
-  (cd "$out" && sha256sum live-match-collector.exe | tee SHA256SUMS.exe && sha256sum -c SHA256SUMS && sha256sum -c SHA256SUMS.exe)
   {
     printf 'purpose=%s\nsource=%s\nprofile=%s\n' "$purpose" "$source_sha" "$profile"
     printf 'tracked_worktree_changes:\n'

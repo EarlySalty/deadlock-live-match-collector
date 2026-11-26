@@ -202,6 +202,9 @@ class DraftTests(unittest.TestCase):
             with zipfile.ZipFile(archive, "w") as z:
                 z.writestr("live-match-collector.exe", exe)
             (root / "dist" / "SHA256SUMS").write_text(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  package.zip\n")
+            standalone = root / "dist" / "live-match-collector.exe"
+            standalone.write_bytes(exe)
+            (root / "dist" / "SHA256SUMS.exe").write_text(f"{hashlib.sha256(exe).hexdigest()}  live-match-collector.exe\n")
             report = root / "dist" / "clamav-report.txt"
             report.write_text(f"exe_sha256={hashlib.sha256(exe).hexdigest()}\nInfected files: 0\n")
             (root / "dist" / "build-environment.txt").write_text("mock environment\n")
@@ -228,6 +231,13 @@ class DraftTests(unittest.TestCase):
                         self.assertIn("gh release create v0.2.0 --draft --verify-tag", calls)
                         self.assertTrue(calls.splitlines()[-1].startswith("gh release create"))
             log.write_text("")
+            standalone.write_bytes(b"different synthetic executable")
+            (root / "dist" / "SHA256SUMS.exe").write_text(f"{hashlib.sha256(standalone.read_bytes()).hexdigest()}  live-match-collector.exe\n")
+            result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)], cwd=root, env=env, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(log.read_text(), "")
+            standalone.write_bytes(exe)
+            (root / "dist" / "SHA256SUMS.exe").write_text(f"{hashlib.sha256(exe).hexdigest()}  live-match-collector.exe\n")
             report.write_text("exe_sha256=wrong\nInfected files: 0\n")
             result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)],
                                     cwd=root, env=env, capture_output=True)
