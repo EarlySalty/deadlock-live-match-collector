@@ -1,14 +1,14 @@
 # Deadlock live match collector
 
-Windows x64 console application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. The Windows client connects directly to the community HTTPS API. Source, tests and pinned dependencies are available for independent inspection; check the release notes for the status of any published build.
+Windows x64 console application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. Current integration candidate: no authorized live source is available; startup fails before credential input or network access. The intended HTTPS transport is retained but inactive. Source, tests and pinned dependencies are available for independent inspection; check the release notes for the status of any published build.
 
 [German direct setup instructions](packaging/Anleitung-Direkt.txt) · [API v3 / upload schema 3](docs/contract/README.md) · [GitHub releases](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
 
 ## Live values
 
-The collector uses a pinned read-only game-process reader. It observes the local hero, playing time, game mode and pause; K/D/A, own/enemy team souls, visible scoreboard and team statistics, own items and ability upgrades, visible structures and objective status/timers. Unknown values remain null or absent. Only directly observed game timers are represented as direct; bridge-buff estimates are separate and explicitly labelled. No names, Steam IDs, raw match ID, raw memory, positions or new hidden enemy data are sent.
+The former game-process reader and its asset parser have been removed. The independent model is intended to represent the local hero, playing time, game mode and pause; K/D/A, own/enemy team souls, visible scoreboard and team statistics, own items and ability upgrades, visible structures and objective status/timers. Unknown values remain null or absent. Only directly observed game timers are represented as direct; bridge-buff estimates are separate and explicitly labelled. No names, Steam IDs, raw match ID, raw memory, positions or new hidden enemy data are sent.
 
-The v3 upload has schema_version=3, random per-process writer ID, monotonically increasing sequence and match epoch. The actual match identifier stays in volatile local memory. The complete encoded HTTPS JSON body is limited to 32768 bytes. Old upload schema 2 is rejected; no v2 fallback. See the [full synthetic payload](docs/contract/live-match-api-v3-vectors.json) and [field definitions](docs/contract/live-match-api-v3.schema.json).
+The v3 upload has schema_version=3, random per-process writer ID, monotonically increasing sequence and match epoch. Only an opaque source-provided volatile session token is used; real match IDs are not required. The complete encoded HTTPS JSON body is limited to 32768 bytes. Old upload schema 2 is rejected; no v2 fallback. See the [full synthetic payload](docs/contract/live-match-api-v3-vectors.json) and [field definitions](docs/contract/live-match-api-v3.schema.json).
 
 The channel key (dlm_ plus 64 ASCII hexadecimal characters) is entered without echo and sent in the Authorization header only. Never include it in a URL or issue report. A key is bound to a writer; rotate for a new process if required, not merely because of a long pause. Temporary failures use bounded backoff with new observations. Ctrl+C stops sending. A 204 response is an acknowledgment, not proof of fresh game data.
 
@@ -20,7 +20,7 @@ Full values are restricted to the authorized bot consumer and the owning partner
 
 ## Internal function test
 
-Use an isolated, authorized backend with synthetic test channel/key and the matching schema 3 build. No public release, MIT grant or production deployment is needed.
+The following is the intended test plan after a source is authorized. Currently only synthetic model/transport tests and isolated backend tests are applicable; the executable deliberately exits before key input or upload. No public release or production deployment is authorized.
 
 1. Verify matching schema/vector hashes. Run the Collector Rust checks and backend collector/router/bot-consumer tests.
 2. Test a full synthetic payload through the actual HTTP router and authorized bot consumer, check every intended game-value group, cross-channel denial, public allowlist and no telemetry persistence (including expiry, restart, rotation and concurrent requests).
@@ -39,7 +39,7 @@ Do not run against production without permission. Expect exactly 401, which conf
 
 ## Windows safety and build
 
-The program reads game process memory. Read-only access does not guarantee permission under Valve, anti-cheat or tournament rules. Do not bypass protection mechanisms or run real-game tests without appropriate authorization.
+The program no longer reads game process memory. A complete authorized source is missing. No live game test or production use is permitted; do not bypass protection mechanisms.
 
 Windows may show SmartScreen for an unsigned executable. Compare the provided SHA-256 with the executable or ZIP before starting; keep a file quarantined if antivirus reports a specific threat. Do not disable protection. To report a problem, use the version and file SHA-256, never the channel key.
 
