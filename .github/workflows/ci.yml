@@ -17,10 +17,14 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Initialize evidence
+        run: |
+          mkdir -p dist
+          printf 'source=%s\nrun=%s\nattempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > dist/run-evidence.txt
       - name: Scan committed history for secrets
         uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
         env:
@@ -30,7 +34,10 @@ jobs:
       - name: Audit locked Rust dependencies
         run: |
           cargo install --locked cargo-audit --version 0.23.0
-          cargo audit --deny warnings
+          status=0
+          cargo audit --deny warnings || status=$?
+          printf 'cargo-audit-exit=%s\n' "$status" > dist/audit-status.txt
+          exit "$status"
       - name: Install Windows build tools
         run: |
           sudo apt-get update -qq
@@ -39,3 +46,22 @@ jobs:
       - name: Test, package, scan and verify
         id: package
         run: bash packaging/build-checks.sh
+      - name: Retain text-only security evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: security-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            dist/run-evidence.txt
+            dist/SHA256SUMS
+            dist/SHA256SUMS.exe
+            dist/Cargo.lock.sha256
+            dist/build-environment.txt
+            dist/dependency-gate.json
+            dist/cargo-sbom.cdx.json
+            dist/clamav-report.txt
+            dist/virustotal-report.json
+            dist/virustotal-report.md
+            dist/audit-status.txt

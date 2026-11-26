@@ -5,10 +5,15 @@ archive=${1:?ZIP required}
 : "${GITHUB_SHA:?Release SHA required}"
 : "${GITHUB_REPOSITORY:?Repository required}"
 bash packaging/verify-package.sh "$archive"
+python3 packaging/virustotal_report.py dist --verify
+python3 packaging/dependency_evidence.py dist --verify
 gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
   --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
   --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
 gh attestation verify dist/live-match-collector.exe --repo "$GITHUB_REPOSITORY" \
+  --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+  --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
+gh attestation verify dist/cargo-sbom.cdx.json --repo "$GITHUB_REPOSITORY" \
   --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
   --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
 python3 packaging/release_checks.py tag
@@ -17,12 +22,9 @@ release_flags=()
 notes=$(mktemp)
 trap 'rm -f "$notes"' EXIT
 cp packaging/release-notes.md "$notes"
-report_assets=()
-if [[ -f dist/virustotal-report.md ]]; then
-  printf '\n' >> "$notes"
-  cat dist/virustotal-report.md >> "$notes"
-  report_assets=(dist/virustotal-report.md)
-fi
+printf '\n' >> "$notes"
+cat dist/virustotal-report.md >> "$notes"
+report_assets=(dist/virustotal-report.md dist/virustotal-report.json dist/cargo-sbom.cdx.json dist/dependency-gate.json dist/Cargo.lock.sha256)
 case "${RELEASE_MODE:-stable}" in
   stable) python3 packaging/release_checks.py preflight ;;
   prerelease)

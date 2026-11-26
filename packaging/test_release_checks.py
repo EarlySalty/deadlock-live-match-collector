@@ -208,6 +208,7 @@ class DraftTests(unittest.TestCase):
             report = root / "dist" / "clamav-report.txt"
             report.write_text(f"exe_sha256={hashlib.sha256(exe).hexdigest()}\nInfected files: 0\n")
             (root / "dist" / "build-environment.txt").write_text("mock environment\n")
+            (root / "dist" / "virustotal-report.md").write_text("synthetic report\n")
             log = root / "calls"
             for name in ("gh", "python3"):
                 stub = root / "bin" / name
@@ -217,7 +218,7 @@ class DraftTests(unittest.TestCase):
                        RELEASE_TAG="v0.2.0", GITHUB_SHA=SHA, GITHUB_REPOSITORY=REPO,
                        MOCK_LOG=str(log), MOCK_FAIL="", RELEASE_MODE="stable")
             for fail in ("attestation verify", "release_checks.py tag", "release_checks.py ci",
-                         "release_checks.py preflight", ""):
+                         "release_checks.py preflight", "virustotal_report.py dist --verify", "dependency_evidence.py dist --verify", ""):
                 with self.subTest(fail=fail):
                     log.write_text("")
                     result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)],
