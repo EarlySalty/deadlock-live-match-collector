@@ -40,7 +40,7 @@ fn read_key(
     Err(INVALID)
 }
 
-fn validate(input: &[u8]) -> Result<Zeroizing<String>, &'static str> {
+pub(crate) fn validate(input: &[u8]) -> Result<Zeroizing<String>, &'static str> {
     let token = std::str::from_utf8(input).map_err(|_| INVALID)?.trim();
     if !token
         .strip_prefix("dlm_")

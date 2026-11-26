@@ -1,7 +1,9 @@
 //! Black-box proof: neither regular nor internal-test binaries solicit a key without
 //! an authorized source. No real network or game access in this test.
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
 
+#[cfg(not(windows))]
 #[test]
 fn binary_stops_before_key_input_when_source_not_authorized() {
     let output = Command::new(env!("CARGO_BIN_EXE_live-match-collector"))
@@ -15,6 +17,7 @@ fn binary_stops_before_key_input_when_source_not_authorized() {
     assert!(!stderr.contains("Verbindungsschlüssel"));
     assert!(!stderr.contains("Warte auf ein laufendes"));
 }
+#[cfg(not(windows))]
 #[test]
 fn binary_rejects_arguments_before_source_or_key_input() {
     let output = Command::new(env!("CARGO_BIN_EXE_live-match-collector"))

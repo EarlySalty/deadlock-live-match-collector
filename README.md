@@ -1,6 +1,6 @@
 # Deadlock live match collector
 
-Windows x64 console application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. Current integration candidate: no authorized live source is available; startup fails before credential input or network access. The intended HTTPS transport is retained but inactive. The current source tree is independent of Deadlock Plus; no former reader, assets, or dependency are required. There is **no functioning live collector download** for this development state. Publicly readable source is not a grant of an open-source license; licensing of the collector code is pending an owner decision. Preserve third-party notices.
+Windows x64 desktop/tray application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. Current integration candidate: no authorized live source is available; the desktop client remains in standby and never uploads without an authorized source. The non-Windows development CLI still exits before credential input. The intended HTTPS transport is retained but inactive. The current source tree is independent of Deadlock Plus; no former reader, assets, or dependency are required. There is **no functioning live collector download** for this development state. Publicly readable source is not a grant of an open-source license; licensing of the collector code is pending an owner decision. Preserve third-party notices.
 
 [German direct setup instructions](packaging/Anleitung-Direkt.txt) · [API v3 / upload schema 3](docs/contract/README.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
@@ -10,7 +10,7 @@ The former game-process reader and its asset parser have been removed. The indep
 
 The v3 upload has schema_version=3, random per-process writer ID, monotonically increasing sequence and match epoch. Only an opaque source-provided volatile session token is used; real match IDs are not required. The complete encoded HTTPS JSON body is limited to 32768 bytes. Old upload schema 2 is rejected; no v2 fallback. See the [full synthetic payload](docs/contract/live-match-api-v3-vectors.json) and [field definitions](docs/contract/live-match-api-v3.schema.json).
 
-The channel key (dlm_ plus 64 ASCII hexadecimal characters) is entered without echo and sent in the Authorization header only. Never include it in a URL or issue report. A key is bound to a writer; rotate for a new process if required, not merely because of a long pause. Temporary failures use bounded backoff with new observations. Ctrl+C stops sending. A 204 response is an acknowledgment, not proof of fresh game data.
+The channel key (dlm_ plus 64 ASCII hexadecimal characters) is entered into a masked Windows settings field and stored in the current user's Windows Credential Manager; it is sent in the Authorization header only. The desktop client runs in the notification area, checks for Deadlock every two seconds when idle, and supports optional opt-in HKCU Run autostart, credential removal and explicit exit. Never include it in a URL or issue report. A key is bound to a writer; rotate for a new process if required, not merely because of a long pause. Temporary failures use bounded backoff with new observations. Select Beenden in the Windows settings or tray menu to stop sending; closing the window hides it. Autostart is disabled separately. A 204 response is an acknowledgment, not proof of fresh game data.
 
 ## Transient backend and access
 
@@ -20,12 +20,12 @@ Full values are restricted to the authorized bot consumer and the owning partner
 
 ## Internal function test
 
-The following is the intended test plan after a source is authorized. Currently only synthetic model/transport tests and isolated backend tests are applicable; the executable deliberately exits before key input or upload. No public release or production deployment is authorized.
+The following is the intended test plan after a source is authorized. Currently only synthetic model/transport tests and isolated backend tests are applicable; the Windows executable stays in standby without uploads; only the non-Windows CLI retains the source-blocked exit. No public release or production deployment is authorized.
 
 1. Verify matching schema/vector hashes. Run the Collector Rust checks and backend collector/router/bot-consumer tests.
 2. Test a full synthetic payload through the actual HTTP router and authorized bot consumer, check every intended game-value group, cross-channel denial, public allowlist and no telemetry persistence (including expiry, restart, rotation and concurrent requests).
 3. Build a Windows x64 test executable and record its SHA-256. Copy it into the authorized test environment. Run the setup in [Anleitung.txt](packaging/Anleitung.txt).
-4. Check Windows console/key input, connection, drift/eligibility, real game attach/detach and pause/resume only after the actual rules and test environment are authorized. Verify the bot consumes the observed values, not synthetic ones masquerading as live measurements.
+4. Check Windows tray/settings, dummy-key Credential Manager roundtrip, duplicate-instance protection, optional autostart on/off and exit in an isolated test environment. Check actual game attach/detach, connection, drift/eligibility and pause/resume only after the actual rules and test environment are authorized. Verify the bot consumes the observed values, not synthetic ones masquerading as live measurements.
 
 A local unauthenticated routing/auth preflight for the matching endpoint uses the first synthetic vector; substitute the authorized HTTPS test base URL:
 ```sh
