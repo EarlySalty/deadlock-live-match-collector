@@ -11,6 +11,9 @@ target=x86_64-pc-windows-gnu
 out="$(pwd)/dist"
 profile=release
 suffix=""
+build_features=()
+guide=packaging/Anleitung.txt
+purpose=internal-function-test
 case "${1:-}" in
   "")
     test "$#" -eq 0
@@ -20,6 +23,20 @@ case "${1:-}" in
     out="$out/internal-test"
     source_sha=$(git rev-parse HEAD)
     suffix="-internal-${source_sha:0:12}"
+    build_features=(--features internal-test)
+    if [[ -n "${CARGO_SLOT:-}" ]] || command -v cargo-slot >/dev/null; then
+      profile=verify
+    else
+      profile=debug
+    fi
+    ;;
+  --direct-test)
+    test "$#" -eq 1
+    out="$out/direct-test"
+    source_sha=$(git rev-parse HEAD)
+    suffix="-direct-${source_sha:0:12}"
+    guide=packaging/Anleitung-Direkt.txt
+    purpose=authorized-direct-function-test
     if [[ -n "${CARGO_SLOT:-}" ]] || command -v cargo-slot >/dev/null; then
       profile=verify
     else
@@ -27,7 +44,7 @@ case "${1:-}" in
     fi
     ;;
   *)
-    echo "Usage: package-win64.sh [--internal-test]" >&2
+    echo "Usage: package-win64.sh [--internal-test|--direct-test]" >&2
     exit 2
     ;;
 esac
@@ -39,9 +56,9 @@ fi
 if [[ "$profile" == release ]]; then
   cargo build --locked --release --target "$target"
 elif [[ "$profile" == verify ]]; then
-  CARGO_SLOT_DEPLOY=0 "${CARGO_SLOT:-cargo-slot}" build --locked --target "$target" --features internal-test
+  CARGO_SLOT_DEPLOY=0 "${CARGO_SLOT:-cargo-slot}" build --locked --target "$target" "${build_features[@]}"
 else
-  cargo build --locked --target "$target" --features internal-test
+  cargo build --locked --target "$target" "${build_features[@]}"
 fi
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -60,7 +77,7 @@ if grep -Eiq '^lib(gcc|winpthread|stdc)' <<< "$imports"; then
   exit 1
 fi
 cp "$exe" "$tree/"
-cp packaging/Anleitung.txt "$tree/"
+cp "$guide" "$tree/Anleitung.txt"
 while IFS=$'\t' read -r package manifest; do
   dest="$tree/Lizenzen/$package"
   mkdir -p "$dest"
@@ -86,7 +103,7 @@ if [[ "$profile" != release ]]; then
   unzip -p "$out/$archive" live-match-collector.exe > "$out/live-match-collector.exe"
   (cd "$out" && sha256sum live-match-collector.exe | tee SHA256SUMS.exe && sha256sum -c SHA256SUMS && sha256sum -c SHA256SUMS.exe)
   {
-    printf 'purpose=internal-function-test\nsource=%s\nprofile=%s\n' "$source_sha" "$profile"
+    printf 'purpose=%s\nsource=%s\nprofile=%s\n' "$purpose" "$source_sha" "$profile"
     printf 'tracked_worktree_changes:\n'
     git status --short --untracked-files=no
     rustc -Vv

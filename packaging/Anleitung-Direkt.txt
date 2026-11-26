@@ -1,0 +1,14 @@
+Deadlock Live Match Collector 0.2.0 – interner Direktverbindungstest (Windows x64)
+
+Endpunkt: https://deutsche-deadlock-community.de/twitch/api/v3/live-match
+API v3, Upload-Schema 3. Kein lokaler Proxy, keine test-ca.pem erforderlich.
+Erst nach Freigabe und erfolgreichem Backend-Deployment verwenden.
+
+1. ZIP entpacken und SHA-256 der EXE gegen die separat mitgeteilte Prüfsumme prüfen (PowerShell: Get-FileHash .\live-match-collector.exe -Algorithm SHA256).
+2. Im eigenen autorisierten Twitch-Partner-Dashboard den Windows-Collector-Verbindungsschlüssel erzeugen. Schlüssel nicht teilen oder in URLs/Logs verwenden.
+3. live-match-collector.exe starten und Schlüssel verdeckt eingeben (dlm_ + 64 Hex-Zeichen). Nach zulässigem Spielstart wartet der Collector auf ein laufendes Match und überträgt frische Beobachtungen per HTTPS mit Zertifikatsprüfung; keine Redirects.
+4. Im eigenen Dashboard die Live-Match-Details prüfen. Bei Neustart des Collectors kann eine Schlüsselrotation nötig sein; bei abgelaufener Epoche auf das nächste echte Match warten. Strg+C beendet die Übertragung.
+
+Der Collector liest Spielprozessspeicher. Read-only garantiert keine Zulässigkeit nach Valve-, Anti-Cheat- oder Turnierregeln. Vor echtem Spieltest Erlaubnis und aktuelle Regeln prüfen; keine Schutzmechanismen deaktivieren oder umgehen. Unsigned: SmartScreen kann warnen; konkrete AV-Bedrohungsmeldungen nicht ignorieren.
+
+Nur autorisierter interner Test, kein öffentlicher Release. Der Backend-Kandidat hält Live-Werte kurzlebig im RAM, Anzeige stale nach 12 s, Payload ab 60 s löschfällig (Sweep 30 s). Keine dauerhafte Spielwertspeicherung vorgesehen. Die tatsächliche Windows-/Spiel-/HTTPS-Strecke ist nach Deployment zu verifizieren.
