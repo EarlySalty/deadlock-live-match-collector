@@ -9,9 +9,11 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
+import uuid
 import zipfile
 
-from release_checks import SUMMARY, preflight, successful_job, successful_run, require_tag
+from release_checks import ENDPOINT, MAX_BODY_BYTES, PREFLIGHT_PAYLOAD, encode_preflight_payload, preflight, successful_job, successful_run, require_tag
 
 SHA = "a" * 40
 OTHER = "b" * 40
@@ -29,10 +31,10 @@ class PreflightTests(unittest.TestCase):
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
-                outer.requests.append((self.path, dict(self.headers), json.loads(body)))
+                outer.requests.append((self.path, dict(self.headers), body))
                 time.sleep(outer.delay)
                 self.send_response(outer.status)
-                if outer.status in (301, 302, 307, 308):
+                if outer.status in (301, 302, 303, 307, 308):
                     self.send_header("Location", "/redirected")
                 self.end_headers()
 
@@ -42,39 +44,69 @@ class PreflightTests(unittest.TestCase):
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
-        self.url = f"http://127.0.0.1:{self.server.server_port}/upload"
+        self.url = f"http://127.0.0.1:{self.server.server_port}/twitch/api/v3/live-match"
 
     def tearDown(self):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join()
 
-    def test_valid_summary_without_key(self):
+    def test_valid_minimal_v3_upload_without_key(self):
         preflight(self.url)
         self.assertEqual(len(self.requests), 1)
-        path, headers, body = self.requests[0]
-        self.assertEqual(path, "/upload")
+        path, headers, raw = self.requests[0]
+        self.assertEqual(path, "/twitch/api/v3/live-match")
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertNotIn("Authorization", headers)
-        self.assertEqual(body, SUMMARY)
-        self.assertEqual(set(body), {"match_id", "hero", "game_seconds", "kills", "deaths", "assists", "team_souls", "enemy_souls"})
-        self.assertIsInstance(body["match_id"], str)
-        self.assertTrue(0 < int(body["match_id"]) < 2**64)
-        self.assertTrue(0 < len(body["hero"].encode()) <= 80)
+        self.assertNotIn("Cookie", headers)
+        self.assertEqual(int(headers["Content-Length"]), len(raw))
+        self.assertEqual(MAX_BODY_BYTES, 32768)
+        self.assertLessEqual(len(raw), 32768)
+        body = json.loads(raw.decode("utf-8"))
+        self.assertEqual(body, {
+            "schema_version": 3, "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+            "sequence": 1, "match_epoch": 1, "hero": "Infernus", "game_seconds": 42,
+        })
+        self.assertIs(type(body["schema_version"]), int)
+        writer = uuid.UUID(body["writer_id"])
+        self.assertEqual(writer.version, 4)
+        self.assertEqual(str(writer), body["writer_id"])
+        for field in ("sequence", "match_epoch"):
+            self.assertIs(type(body[field]), int)
+            self.assertTrue(1 <= body[field] <= 9007199254740991)
+        self.assertIs(type(body["game_seconds"]), int)
         self.assertTrue(0 <= body["game_seconds"] <= 86400)
-        for field in ("kills", "deaths", "assists"):
-            self.assertTrue(type(body[field]) is int and 0 <= body[field] <= 1000)
-        for field in ("team_souls", "enemy_souls"):
-            self.assertTrue(type(body[field]) is int and 0 <= body[field] <= 10**9)
+        self.assertTrue(1 <= len(body["hero"].encode("utf-8")) <= 80)
+        self.assertEqual(body["hero"].strip(), body["hero"])
+        self.assertTrue(body["hero"].isprintable())
+
+    def test_production_preflight_targets_v3_https_only(self):
+        with patch("release_checks.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "401", "")) as run:
+            preflight()
+        args = run.call_args.args[0]
+        self.assertEqual(ENDPOINT, "https://deutsche-deadlock-community.de/twitch/api/v3/live-match")
+        self.assertEqual(args[-1], ENDPOINT)
+        self.assertEqual(args[args.index("--proto") + 1], "=https")
+        self.assertEqual(args[args.index("--request") + 1], "POST")
+        self.assertEqual(args[args.index("--data-binary") + 1], "@-")
+        self.assertEqual(run.call_args.kwargs["input"].encode("utf-8"), encode_preflight_payload())
+        self.assertEqual(run.call_count, 1)
+
+    def test_encoded_byte_limit_fails_before_network(self):
+        with patch.dict(PREFLIGHT_PAYLOAD, {"hero": "ä" * 16384}):
+            with patch("release_checks.subprocess.run") as run:
+                with self.assertRaisesRegex(ValueError, "32768 UTF-8 bytes"):
+                    preflight(self.url)
+                run.assert_not_called()
 
     def test_every_other_status_fails_without_redirect(self):
-        for status in (200, 204, 301, 302, 307, 308, 400, 403, 404, 415, 422, 429, 500, 503):
+        for status in (200, 204, 301, 302, 303, 307, 308, 400, 403, 404, 408, 409, 410, 413, 415, 422, 429, 500, 503):
             with self.subTest(status=status):
                 self.status = status
                 self.requests.clear()
                 with self.assertRaises(ValueError):
                     preflight(self.url)
-                self.assertEqual([r[0] for r in self.requests], ["/upload"])
+                self.assertEqual([r[0] for r in self.requests], ["/twitch/api/v3/live-match"])
 
     def test_timeout(self):
         self.delay = 1
@@ -85,7 +117,7 @@ class PreflightTests(unittest.TestCase):
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             with self.assertRaises(ValueError):
-                preflight(f"http://127.0.0.1:{sock.getsockname()[1]}/upload", timeout=1)
+                preflight(f"http://127.0.0.1:{sock.getsockname()[1]}/twitch/api/v3/live-match", timeout=1)
 
 
 class GateTests(unittest.TestCase):
@@ -110,7 +142,7 @@ class GateTests(unittest.TestCase):
         for field, value in (("head_sha", OTHER), ("head_branch", "feature"),
                              ("event", "pull_request"), ("head_repository", {"full_name": "fork/repo"}),
                              ("path", ".github/workflows/other.yml"), ("status", "in_progress"),
-                             ("conclusion", "failure"), ("conclusion", "cancelled"), ("conclusion", "skipped")):
+                             ("conclusion", "failure"), ("conclusion", "cancelled"), ("conclusion", "skipped"), ("conclusion", "neutral")):
             with self.subTest(field=field, value=value):
                 run = dict(self.run, **{field: value})
                 with self.assertRaises(ValueError):
@@ -123,7 +155,7 @@ class GateTests(unittest.TestCase):
 
     def test_job_must_be_successful_and_exact(self):
         for field, value in (("head_sha", OTHER), ("run_id", 13), ("run_attempt", 1),
-                             ("status", "queued"), ("conclusion", "skipped"), ("name", "other")):
+                             ("status", "queued"), ("conclusion", "skipped"), ("conclusion", "neutral"), ("name", "other")):
             with self.subTest(field=field):
                 with self.assertRaises(ValueError):
                     successful_job({"total_count": 1, "jobs": [dict(self.job, **{field: value})]}, self.run)
@@ -132,9 +164,17 @@ class GateTests(unittest.TestCase):
                 successful_job({"total_count": len(jobs), "jobs": jobs}, self.run)
 
     def test_lightweight_and_annotated_tags(self):
-        require_tag("v0.2.0", SHA, "refs/heads/main", "0.2.0", f"{SHA}\trefs/tags/v0.2.0\n")
+        main_ref = f"{SHA}\trefs/heads/main\n"
+        require_tag("v0.2.0", SHA, "refs/heads/main", "0.2.0", main_ref + f"{SHA}\trefs/tags/v0.2.0\n")
         require_tag("v0.2.0", SHA, "refs/heads/main", "0.2.0",
-                    f"{OTHER}\trefs/tags/v0.2.0\n{SHA}\trefs/tags/v0.2.0^{{}}\n")
+                    main_ref + f"{OTHER}\trefs/tags/v0.2.0\n{SHA}\trefs/tags/v0.2.0^{{}}\n")
+
+    def test_main_must_still_equal_dispatched_sha(self):
+        tag_ref = f"{SHA}\trefs/tags/v0.2.0\n"
+        for main_ref in ("", f"{OTHER}\trefs/heads/main\n", f"{SHA}\trefs/heads/main\n" * 2):
+            with self.subTest(main_ref=main_ref):
+                with self.assertRaises(ValueError):
+                    require_tag("v0.2.0", SHA, "refs/heads/main", "0.2.0", main_ref + tag_ref)
 
     def test_bad_tags(self):
         for tag, ref, version, refs in (
@@ -147,7 +187,7 @@ class GateTests(unittest.TestCase):
         ):
             with self.subTest(tag=tag, ref=ref, refs=refs):
                 with self.assertRaises(ValueError):
-                    require_tag(tag, SHA, ref, version, refs)
+                    require_tag(tag, SHA, ref, version, f"{SHA}\trefs/heads/main\n" + refs)
 
 
 class DraftTests(unittest.TestCase):

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Minimal live-match upload schema version 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "writer_id",
+    "sequence",
+    "match_epoch",
+    "hero",
+    "game_seconds"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "writer_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "match_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "hero": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Additional server validation: 1–80 UTF-8 bytes, trimmed, no Unicode control characters."
+    },
+    "game_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400
+    },
+    "paused": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "midboss": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "present",
+            "source"
+          ],
+          "properties": {
+            "present": {
+              "type": "boolean"
+            },
+            "source": {
+              "const": "game"
+            },
+            "next_spawn_in_seconds": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 7200
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "present": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "next_spawn_in_seconds": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

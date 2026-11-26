@@ -1,103 +1,55 @@
 # Deadlock live match collector
 
-This Windows x64 console app sends your live scoreboard to the Deutsche Deadlock Community Twitch overlay. Run it on the PC where you play Deadlock. You need a channel key from the overlay builder. [Windows ZIP and checksum](https://github.com/EarlySalty/deadlock-live-match-collector/releases) · [Setup instructions in German](packaging/Anleitung.txt)
+Windows x64 console application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. This is the internal function-test candidate, not a public release.
 
-## Beim ersten Start unter Windows
+[German setup instructions](packaging/Anleitung.txt) · [API v3 / upload schema 3](docs/contract/README.md)
 
-Windows kann „Der Computer wurde durch Windows geschützt“ anzeigen. Der Collector hat keine Windows-Codesignatur. Bei selten heruntergeladenen Programmen kann SmartScreen deshalb vor einer unbekannten App warnen. Vergleiche vor dem Start die SHA-256-Prüfsumme deiner ZIP mit der Datei `SHA256SUMS` aus demselben Release. Wenn die Werte übereinstimmen und du der Quelle vertraust, kannst du den Start bestätigen, sofern Windows diese Möglichkeit anbietet. [So bewertet Microsoft die App-Reputation](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)
+## Live values
 
-Nennt dein Virenscanner eine konkrete Bedrohung oder stellt die EXE unter Quarantäne, lass sie dort. Melde den Erkennungsnamen, die Version des Collectors und die SHA-256-Prüfsumme der EXE im [Issue-Tracker](https://github.com/EarlySalty/deadlock-live-match-collector/issues). Dein Kanalschlüssel gehört nur in das Eingabefeld des Collectors.
+The collector uses a pinned read-only game-process reader. It observes the local hero, playing time, game mode and pause; K/D/A, own/enemy team souls, visible scoreboard and team statistics, own items and ability upgrades, visible structures and objective status/timers. Unknown values remain null or absent. Only directly observed game timers are represented as direct; bridge-buff estimates are separate and explicitly labelled. No names, Steam IDs, raw match ID, raw memory, positions or new hidden enemy data are sent.
 
-## How the overlay gets its data
+The v3 upload has schema_version=3, random per-process writer ID, monotonically increasing sequence and match epoch. The actual match identifier stays in volatile local memory. The complete encoded HTTPS JSON body is limited to 32768 bytes. Old upload schema 2 is rejected; no v2 fallback. See the [full synthetic payload](docs/contract/live-match-api-v3-vectors.json) and [field definitions](docs/contract/live-match-api-v3.schema.json).
 
-The Windows part lives in [src/main.rs](src/main.rs). The main loop waits for Deadlock, attaches through the reader and requests a live snapshot. The `payload` function checks the match state and roster, totals each team’s souls and selects the local player’s K/D/A. The uploader sends that snapshot to the Twitch service. The service handles channel pairing, expires old snapshots and supplies the rotating OBS card.
+The channel key (dlm_ plus 64 ASCII hexadecimal characters) is entered without echo and sent in the Authorization header only. Never include it in a URL or issue report. A key is bound to a writer; rotate for a new process if required, not merely because of a long pause. Temporary failures use bounded backoff with new observations. Ctrl+C stops sending. A 204 response is an acknowledgment, not proof of fresh game data.
 
-The game-specific process reader and hero catalogue are Rust dependencies pinned to a specific revision in [Cargo.toml](Cargo.toml). You can inspect the game-reading implementation in [deadlock-reader](https://github.com/deadlock-plus/deadlock-rs/tree/8b408b9103a022e7bac620bfa4916778b8fdfaa1/crates/deadlock-reader).
+## Transient backend and access
 
-## What the collector reads and sends
+The intended internal backend keeps only the latest game snapshot in RAM, never in a database, file, backup, analytics or log. Display becomes stale after 12 seconds and expired payloads are removed after 60 seconds; rotation/revocation and process restart remove the snapshot. Minimal key and ordering metadata are separate from game values. An advancing unpaused clock with the same valid writer and higher sequence can resume after a long pause if the volatile watermark is still available. If it has been lost, an explicit epoch-expired conflict makes the client wait for a real new match without rotating. No fabricated heartbeat, old-packet replay or automatic writer takeover.
 
-**Neue Entwicklungsfunktion (noch nicht als Windows-Release veröffentlicht):**
-Der Collector überträgt zusätzlich den Pausenstatus, falls dieser vom Reader
-eindeutig vorliegt, und ausschließlich einen vom Spiel selbst gemeldeten
-Mid-Boss-Zustand bzw. dessen nächsten Spawn. Die Herkunft wird mit
-`source: "game"` markiert. Rift-, Urnen-, Jungle- und Bridge-Buff-Respawns
-bleiben **unbekannt**, wenn die Client-Daten keine zuverlässige nächste
-Spawnzeit liefern. Es gibt keinerlei Hochrechnung aus vorherigen Kills,
-keine Gegnerpositionen, keine versteckten Fähigkeiten-Cooldowns und keine
-automatische Weiterzählung im OBS-Browser.
+Full values are restricted to the authorized bot consumer and the owning partner session. The public overlay's previous small projection is unchanged and can be queried by anyone who knows the Twitch channel name. Its URL is not a secret and values can be linked to public stream or game information. The actual nonpersisting router and bot-consumer behavior must be tested; these are internal candidate requirements, not production privacy guarantees.
 
-Serverseitige Ergänzung im Twitch-Bot:
-`POST /twitch/api/v2/live-match` (bestehender Pfad),
-`GET /twitch/api/v2/public/live-match?streamer=...` (kurzlebige Anzeige),
-`GET/POST/DELETE /twitch/api/v2/streamer/live-match-key` (eigener Kanal).
-Der neue Schlüssel wird vom eingeloggten Streamer einmalig erzeugt und beim
-Neuerstellen der alte widerrufen. **Nicht** in der OBS-URL verwenden.
-Der Server muss mit der zugehörigen Datenbankmigration ausgerollt sein,
-bevor der Collector mit diesem Branch verwendet werden kann.
+## Internal function test
 
-Every three seconds the collector asks the read-only deadlock-rs library for a snapshot of the running game. It checks that you are playing, identifies your hero and team, and sums the players’ net worth for each side. It skips spectator sessions and incomplete scoreboards. [Collector source](src/main.rs) · [Pinned reader source](https://github.com/deadlock-plus/deadlock-rs/tree/8b408b9103a022e7bac620bfa4916778b8fdfaa1)
+Use an isolated, authorized backend with synthetic test channel/key and the matching schema 3 build. No public release, MIT grant or production deployment is needed.
 
-The collector sends one HTTPS POST to `https://deutsche-deadlock-community.de/twitch/api/v2/live-match` for each usable snapshot. This example shows the **legacy summary fields**. On this development branch the payload also includes a bounded `details` object (described below); the exact contents depend on the reader's observed fields.
+1. Verify matching schema/vector hashes. Run the Collector Rust checks and backend collector/router/bot-consumer tests.
+2. Test a full synthetic payload through the actual HTTP router and authorized bot consumer, check every intended game-value group, cross-channel denial, public allowlist and no telemetry persistence (including expiry, restart, rotation and concurrent requests).
+3. Build a Windows x64 test executable and record its SHA-256. Copy it into the authorized test environment. Run the setup in [Anleitung.txt](packaging/Anleitung.txt).
+4. Check Windows console/key input, connection, drift/eligibility, real game attach/detach and pause/resume only after the actual rules and test environment are authorized. Verify the bot consumes the observed values, not synthetic ones masquerading as live measurements.
 
-```json
-{"match_id":"123","hero":"Infernus","game_seconds":42,"kills":2,"deaths":3,"assists":4,"team_souls":500,"enemy_souls":600,"game_mode":"normal","paused":false,"midboss":{"present":false,"next_spawn_in_seconds":90,"source":"game"}}
+A local unauthenticated routing/auth preflight for the matching endpoint uses the first synthetic vector; substitute the authorized HTTPS test base URL:
+```sh
+curl --disable --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
+  --connect-timeout 5 --max-time 10 --request POST \
+  --header 'Content-Type: application/json' \
+  --data-binary '{"schema_version":3,"writer_id":"123e4567-e89b-42d3-a456-426614174000","sequence":1,"match_epoch":1,"hero":"Infernus","game_seconds":42}' \
+  https://deutsche-deadlock-community.de/twitch/api/v3/live-match
 ```
+Do not run against production without permission. Expect exactly 401, which confirms routing/auth rejection only, not ingestion, schema or freshness. Use a dedicated authorized test key for authenticated end-to-end testing; do not log credentials.
 
-The optional `paused` and `midboss` properties are sent only when the pinned reader actually supplies them; the JSON above is an example, not a live measurement. If the game marks the match `dont_upload_stats` or the reader reports schema drift, the collector skips the snapshot.
+## Windows safety and build
 
-### Erweiterbarer Deadlock-Datensatz (Entwicklung)
+The program reads game process memory. Read-only access does not guarantee permission under Valve, anti-cheat or tournament rules. Do not bypass protection mechanisms or run real-game tests without appropriate authorization.
 
-Der Collector baut aus dem vorhandenen, gepinnten Deadlock-Reader den
-**versionierten `details.schema_version=1`-Datensatz**. Er besteht aus
-`scoreboard` (bis 12 Spieler, nur spielstandbezogene Werte), `teams`,
-`own_loadout` (nur eigener Held: Items, Ability-Upgrades, Souls, Level),
-`structures` (sichtbare Gebäude-Zustände, ohne Koordinaten) und
-`objectives` (Midboss, Urne, Rift, Bridge Buffs). `capabilities`
-nennt die unterstützten Bereiche. Bei unbekannten Werten wird `null`
-gesendet; die Timer-Quellen `game`, `schedule` und `unknown`
-sind getrennt. Nur `game` ist ein direkt vom Client stammender Timer,
-eine `schedule`-Zeit ist ausdrücklich eine Schätzung.
+Windows may show SmartScreen for an unsigned executable. Compare the provided SHA-256 with the executable or ZIP before starting; keep a file quarantined if antivirus reports a specific threat. Do not disable protection. To report a problem, use the version and file SHA-256, never the channel key.
 
-**Privacy/Fair-Play:** Kein pauschales Serialisieren des ganzen
-`LiveSnapshot`, keine Steam-IDs, Spielernamen, Prozessadressen,
-Positionen, gegnerischen Ult-Cooldowns oder nicht sichtbar begründbaren
-gegnerischen Detailstatistiken. Details stehen **nur dem authentifizierten
-Streamer** am Server-Endpunkt
-`GET /twitch/api/v2/streamer/live-match-details?sections=scoreboard,teams`
-zur Verfügung; andere zulässige Sektionen sind `own_loadout`,
-`structures` und `objectives`. Die öffentliche OBS-API erhält
-nur die bestehende reduzierte Projektion. Es wird **kein Brain** benötigt.
-
-Es können nicht „alle“ Deadlock-Interna verlässlich geliefert werden.
-Das Erweiterungsmodell ermöglicht aber neue ausdrücklich erlaubte
-Datenfelder ohne eine zweite Windows-App. Jede neue Kategorie benötigt
-eine definierte Erkennung, nachweisbare Quelle, Schema-Version und
-Tests; keine fremden versteckten Spielinformationen.
-
-The channel key travels in the Authorization header. The interactive prompt hides it as you type, and the collector keeps it in memory until you close the program. The service uses these values for your public overlay. Press Ctrl+C to stop sending updates. Generate a new key in the builder to invalidate the previous one.
-
-## Verify a download
-The release includes `clamav-report.txt` with the signature database version, SHA-256 of the extracted executable and ClamAV result for that file.
-
-Download the ZIP and `SHA256SUMS` from the same release. In PowerShell, run the following command and compare the result with the checksum in that file.
-
+Use the pinned Rust toolchain and Windows x64 build tools:
 ```powershell
-Get-FileHash .\live-match-collector-0.1.0-win64.zip -Algorithm SHA256
-```
-
-To verify the GitHub build attestation, use a recent version of the GitHub CLI.
-
-```powershell
-gh attestation verify .\live-match-collector-0.1.0-win64.zip --repo EarlySalty/deadlock-live-match-collector
-```
-
-## Build from source
-
-Check out the release tag you want to inspect. On Windows x64, use a stable Rust toolchain with the MSVC build tools and run the following commands.
-
-```powershell
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo build --locked --release
+Get-FileHash .\target\release\live-match-collector.exe -Algorithm SHA256
 ```
 
-With Cargo’s default target directory, the executable is written to `target/release/live-match-collector.exe`. The release workflow cross-compiles the Windows GNU target on Linux. Its packaging script puts the executable, setup instructions and dependency notices in `dist/`. [Release workflow](.github/workflows/release.yml) · [Packaging script](packaging/package-win64.sh)
+Public distribution is a separate later step. Preserve third-party notices. Rights to distribute the executable/assets, actual privacy policy, real Windows/game and backend evidence, rule check, soak/outage/rollback, CI/scan/checksum/attestation, protected draft and final publication permission remain on that separate track. No tag, release or public push is necessary for the internal test.

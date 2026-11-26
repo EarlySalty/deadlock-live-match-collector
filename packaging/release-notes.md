@@ -1,3 +1,7 @@
-Lade die ZIP für Windows x64 herunter. Die Datei `SHA256SUMS` enthält die Prüfsumme der ZIP. In `clamav-report.txt` findest du den Virenscan der darin enthaltenen EXE mit ihrer eigenen Prüfsumme und dem Stand der Virensignaturen.
+Interner Windows-Funktionstest: Deadlock Live Match Collector, API v3 / Upload-Schema 3. Wiederhergestellter Spielwerteumfang: Held, Spielzeit, Spielmodus, Pause, K/D/A, Team-Souls, sichtbares Scoreboard und Teams, eigener Loadout/Items/Ability-Upgrades, sichtbare Strukturen und Objectives/Timer mit Herkunft. Unbekannte Werte bleiben leer. Keine Namen, Steam-IDs, Rohspeicher oder echten Match-IDs.
 
-Windows SmartScreen kann beim ersten Start vor einer unbekannten App warnen. Der Collector hat keine Windows-Codesignatur. Prüfe die ZIP vor dem Start. Nennt dein Virenscanner eine konkrete Bedrohung, lass die Datei gesperrt und melde den Fund im [Issue-Tracker](https://github.com/EarlySalty/deadlock-live-match-collector/issues).
+Der Twitch-Bot soll die vollständigen autorisierten Spielwerte aus einem kurzlebigen RAM-Snapshot erhalten, ohne dauerhaftes Matcharchiv. Die öffentliche Overlay-Projektion bleibt unverändert. Der interne Test erfordert einen passenden isolierten Backend-Kandidaten und einen dedizierten Testkanal.
+
+Der Collector liest Spielprozessspeicher. Read-only-Zugriff garantiert keine Zulässigkeit nach Valve-, Anti-Cheat- oder Turnierregeln. Echte Spieltests erst nach Freigabe. Windows kann SmartScreen für die unsignierte EXE anzeigen; vor dem Start Prüfsumme vergleichen und bei konkretem Virenscanner-Fund die Datei gesperrt lassen.
+
+Dies ist kein öffentlicher Release. Rechte zur Weiterverbreitung, Drittanbieterhinweise, öffentliche Release- und Datenschutzabnahme bleiben getrennt vom internen Funktionstest.

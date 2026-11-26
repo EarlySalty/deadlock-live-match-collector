@@ -1,0 +1,404 @@
+{
+  "api_version": 3,
+  "schema_version": 2,
+  "upload_path": "/twitch/api/v3/live-match",
+  "max_body_bytes": 2048,
+  "cases": [
+    {
+      "name": "minimal",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42
+      },
+      "status": 204
+    },
+    {
+      "name": "midboss",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 204
+    },
+    {
+      "name": "pause",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": true,
+        "midboss": null
+      },
+      "status": 204
+    },
+    {
+      "name": "active-boss",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": true,
+          "source": "game"
+        }
+      },
+      "status": 204
+    },
+    {
+      "name": "wrong-version",
+      "body": {
+        "schema_version": 1,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "zero-sequence",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 0,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "unsafe-counter",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 9007199254740992,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "zero-epoch",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 0,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "bad-writer",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "clock-overflow",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 86401,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "hero-too-long",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "äääääääääääääääääääääääääääääääääääääääää",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "hero-control",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Hero\nX",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "estimated-timer",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "schedule"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "active-countdown",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": true,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "timer-overflow",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 7201,
+          "source": "game"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "old-match-id",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        },
+        "match_id": "123"
+      },
+      "status": 422
+    },
+    {
+      "name": "old-summary",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        },
+        "kills": 2
+      },
+      "status": 422
+    },
+    {
+      "name": "enemy-souls",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        },
+        "enemy_souls": 100
+      },
+      "status": 422
+    },
+    {
+      "name": "details",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        },
+        "details": {
+          "scoreboard": []
+        }
+      },
+      "status": 422
+    },
+    {
+      "name": "nested-private",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game",
+          "player_id": 1
+        }
+      },
+      "status": 422
+    },
+    {
+      "name": "negative-clock",
+      "body": {
+        "schema_version": 2,
+        "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": -1,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 422
+    },
+    {
+      "name": "missing-writer",
+      "body": {
+        "schema_version": 2,
+        "sequence": 1,
+        "match_epoch": 1,
+        "hero": "Infernus",
+        "game_seconds": 42,
+        "paused": false,
+        "midboss": {
+          "present": false,
+          "next_spawn_in_seconds": 90,
+          "source": "game"
+        }
+      },
+      "status": 422
+    }
+  ],
+  "notes": [
+    "Each case is independent, with a new active key and empty writer state; 204 includes unchanged accepted packets.",
+    "No real credentials or game identifiers. Append ASCII spaces to valid JSON to 2048 bytes (204), then one more (413).",
+    "No key: 401 even with malformed body; HEAD valid active key: 204; old v2 POST/HEAD: 410."
+  ]
+}

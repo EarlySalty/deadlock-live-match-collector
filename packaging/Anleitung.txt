@@ -1,43 +1,60 @@
-Live-Match-Daten für dein Twitch-Overlay
+Deadlock Live Match Collector – interner Windows-Funktionstest
 
-Vor dem ersten Start
+Diese Anleitung gilt für den erweiterten Funktionskandidaten, API v3 mit
+Upload-Schema 3. Noch kein öffentlicher Release.
 
-Windows kann bei dieser unsignierten Anwendung „Der Computer wurde durch
-Windows geschützt“ anzeigen. SmartScreen berücksichtigt unter anderem, wie
-bekannt eine Datei ist. Vergleiche die SHA-256-Prüfsumme der ZIP mit der
-veröffentlichten Prüfsumme. Stimmen beide überein und vertraust du der
-Quelle, kannst du den Start bestätigen, falls Windows das anbietet.
+Voraussetzungen
 
-Meldet dein Virenscanner eine konkrete Bedrohung, lass die Datei gesperrt.
-Melde den Erkennungsnamen, die Collector-Version und die SHA-256-Prüfsumme
-der EXE unter https://github.com/EarlySalty/deadlock-live-match-collector/issues.
-Halte deinen Kanalschlüssel geheim.
+Ein freigegebener isolierter Twitch-Bot-Testserver mit passendem Vertrag,
+ein autorisierter Testkanal und eine Windows-x64-Test-EXE mit Prüfsumme.
+Prüfe vor dem Start die SHA-256-Prüfsumme der erhaltenen Datei.
+Die interne EXE nutzt ausschließlich https://localhost:8443/twitch/api/v3/live-match.
+Stelle dort einen autorisierten TLS-Testproxy zum isolierten Backend bereit;
+das Zertifikat muss für localhost gültig und vertrauenswürdig sein.
+Keine Produktivweiterleitung und keine Deaktivierung der Zertifikatsprüfung.
+Windows SmartScreen kann vor einer unsignierten App warnen. Meldet ein
+Virenscanner eine konkrete Bedrohung, lass die Datei gesperrt. Deaktiviere
+keine Schutzmechanismen.
+
+Der Collector liest Spielprozessspeicher. Read-only-Zugriff garantiert
+keine Zulässigkeit nach Valve-, Anti-Cheat- oder Turnierregeln. Einen echten
+Spieltest erst nach Prüfung der Regeln und Freigabe der Testumgebung
+durchführen; keine Schutzmechanismen umgehen.
 
 Einrichtung
 
-1. Öffne den Overlay-Baukasten in deinem Partner-Dashboard. Aktiviere die
-   wechselnden Karten und kopiere die Overlay-URL in eine OBS-Browserquelle.
-2. Erstelle im Baukasten einen Verbindungsschlüssel für deinen Kanal.
-3. Entpacke das ZIP auf deinem Windows-Spielrechner. Starte
-   live-match-collector.exe und füge den Schlüssel im Konsolenfenster ein.
-   Die Eingabe bleibt unsichtbar. Bestätige mit der Eingabetaste.
-4. Lass das Fenster während des Spiels geöffnet. Mit Strg+C beendest du
-   die Übertragung. Beim nächsten Start gibst du den Schlüssel erneut ein.
+1. Öffne das Partner-Dashboard der autorisierten Testumgebung und erzeuge
+   einen Verbindungsschlüssel für den Testkanal.
+2. Starte die passende Windows-Test-EXE. Füge den Schlüssel in das
+   Konsolenfenster ein (dlm_ + 64 Hex-Zeichen). Die Eingabe bleibt
+   unsichtbar. Der Schlüssel gehört niemals in eine OBS-URL oder Logs.
+3. Prüfe zunächst die synthetische Strecke über den Testserver. Starte
+   erst nach Freigabe das echte Spiel und prüfe die Bot-Ausgabe.
+4. Mit Strg+C beendest du die Übertragung. Bei einem neuen Collector-Prozess
+   kann eine Schlüsselrotation nötig sein. Eine lange Pause allein ist
+   kein Grund zur Rotation: bei gültigem Writer und nachgewiesenem
+   Spielfortschritt kann die Übertragung wiederaufgenommen werden.
+   Ist der Epoch-Zustand verloren, wartet der Collector auf das nächste
+   echte Match.
 
-Während du selbst spielst, sendet der Collector die Match-ID, deinen Helden,
-die Spielzeit, deine Kills, Tode und Assists und die Seelen beider Teams
-an den Twitch-Bot der Deutschen Deadlock Community. Die neue Version
-überträgt außerdem den Pausenstatus und – nur wenn das Spiel sie wirklich
-meldet – den Mid-Boss-Zustand und seine nächste Spawnzeit.
-Andere Jungle-Camp-, Urnen- oder Rift-Zeiten werden NICHT geraten.
-Wer deine öffentliche Overlay-URL kennt, kann die aktuellen Werte sehen.
-OBS-Quelle: /twitch/objective-overlay?streamer=DEIN_KANALNAME
+Übertragene Werte
 
-Der Verbindungsschlüssel ist ausschließlich für das Windows-Programm.
-Er darf nicht in einer OBS-URL stehen. Erstelle oder erneuere ihn im
-Overlay-Baukasten; beim Erneuern wird der bisherige Schlüssel ungültig.
-Die erweiterte Übertragung funktioniert erst, wenn der Server die
-neue API und Datenbankmigration bereitstellt.
+Eigener Held, Spielzeit, Spielmodus, Pause, Kills/Tode/Assists, Team-Souls,
+sichtbares Scoreboard und Teamstatistiken, eigener Loadout mit Items und
+Ability-Upgrades, sichtbare Strukturen sowie Objectives/Timer.
+Unbekannte Werte bleiben leer; geschätzte Bridge-Buff-Timer sind getrennt
+gekennzeichnet. Keine Spielernamen, Steam-IDs, echte Match-ID, Rohspeicher,
+Positionen oder neuen versteckten Gegnerinformationen.
 
-Wenn die Verbindung abreißt, blendet das Overlay die Live-Karte nach kurzer
-Zeit aus. Erstellst du einen neuen Schlüssel, verliert der alte seine Gültigkeit.
+Die vorgesehenen Live-Spielwerte bleiben nur kurzzeitig im RAM des
+Testservers. Keine Speicherung von Payloads in Datenbanken, Dateien,
+Logs oder Backups. Die vollständigen Werte sind für autorisierte
+Bot-Funktionen und den eigenen Partnerkanal bestimmt. Die bestehende
+kleine öffentliche Overlay-Projektion bleibt unverändert und ist über
+den Twitch-Kanalnamen auffindbar. Nach 12 Sekunden ohne neue frische
+Beobachtung wird sie stale; nach 60 Sekunden wird der Snapshot gelöscht.
+Das Verhalten muss im echten Testaufbau nachgewiesen werden.
+
+Eine Annahmebestätigung allein beweist nicht, dass die Spieldaten frisch
+sind oder die Bot-Ausgabe funktioniert. Keine öffentlichen Releases,
+keine produktive Verbindung und keine echten Spieltests ohne Freigabe.

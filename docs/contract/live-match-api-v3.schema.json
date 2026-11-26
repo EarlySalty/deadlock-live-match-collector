@@ -1,0 +1,1155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Live match upload schema 3 (full function-test snapshot)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "writer_id",
+    "sequence",
+    "match_epoch",
+    "hero",
+    "game_seconds"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 3
+    },
+    "writer_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "match_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "hero": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "1–80 UTF-8 bytes, trimmed, no Unicode control characters."
+    },
+    "game_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400
+    },
+    "kills": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "deaths": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "assists": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "team_souls": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1000000000
+    },
+    "enemy_souls": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1000000000
+    },
+    "game_mode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "normal",
+        "street_brawl",
+        null
+      ]
+    },
+    "paused": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "midboss": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/midboss"
+        }
+      ]
+    },
+    "details": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/details"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "not": {
+          "required": [
+            "game_mode"
+          ],
+          "properties": {
+            "game_mode": {
+              "const": "normal"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "midboss": {
+            "type": "null"
+          },
+          "details": {
+            "properties": {
+              "objectives": {
+                "properties": {
+                  "midboss": {
+                    "type": "null"
+                  },
+                  "urn": {
+                    "type": "null"
+                  },
+                  "rift": {
+                    "type": "null"
+                  },
+                  "bridge_buffs": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "midboss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "present",
+        "source"
+      ],
+      "properties": {
+        "present": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "const": "game"
+        },
+        "next_spawn_in_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 7200
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "present"
+            ],
+            "properties": {
+              "present": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "next_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scoreboard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "side",
+        "is_local"
+      ],
+      "properties": {
+        "side": {
+          "type": "string",
+          "enum": [
+            "own",
+            "enemy"
+          ]
+        },
+        "is_local": {
+          "type": "boolean"
+        },
+        "slot": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 12
+        },
+        "hero_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "level": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "souls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "kills": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "deaths": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "assists": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "last_hits": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "denies": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "hero_damage": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "objective_damage": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "healing": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "alive": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "is_local"
+            ],
+            "properties": {
+              "is_local": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "last_hits": {
+                "type": "null"
+              },
+              "denies": {
+                "type": "null"
+              },
+              "hero_damage": {
+                "type": "null"
+              },
+              "objective_damage": {
+                "type": "null"
+              },
+              "healing": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "is_local"
+            ],
+            "properties": {
+              "is_local": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "side": {
+                "const": "own"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "team": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "side",
+        "complete"
+      ],
+      "properties": {
+        "side": {
+          "type": "string",
+          "enum": [
+            "own",
+            "enemy"
+          ]
+        },
+        "souls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "ability_points": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "kills": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "deaths": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "assists": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "last_hits": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "denies": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "hero_damage": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "objective_damage": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "healing": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "rejuvenators": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "structures_alive": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 128
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "side"
+            ],
+            "properties": {
+              "side": {
+                "const": "enemy"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ability_points": {
+                "type": "null"
+              },
+              "last_hits": {
+                "type": "null"
+              },
+              "denies": {
+                "type": "null"
+              },
+              "hero_damage": {
+                "type": "null"
+              },
+              "objective_damage": {
+                "type": "null"
+              },
+              "healing": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_id",
+        "unlocked",
+        "points"
+      ],
+      "properties": {
+        "item_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "unlocked": {
+          "type": "boolean"
+        },
+        "points": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        }
+      }
+    },
+    "loadout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "level": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "health": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -1,
+          "maximum": 1000000
+        },
+        "max_health": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "souls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "ability_points": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "creep_souls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "secured_souls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "denied_souls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "neutral_souls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "farm_baseline": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "kill_streak": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "ability_upgrades": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ability"
+          },
+          "minItems": 0,
+          "maxItems": 16
+        }
+      }
+    },
+    "structure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "side",
+        "kind",
+        "state"
+      ],
+      "properties": {
+        "side": {
+          "type": "string",
+          "enum": [
+            "own",
+            "enemy",
+            "unknown"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "guardian",
+            "walker",
+            "base_guardian",
+            "patron",
+            "shrine",
+            "midboss"
+          ]
+        },
+        "lane": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 8
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "standing",
+            "destroyed",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "objective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "present": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 128
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "game",
+            "schedule",
+            "unknown"
+          ]
+        },
+        "next_spawn_in_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 7200
+        },
+        "estimated_spawn_in_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 7200
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "present"
+            ],
+            "properties": {
+              "present": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "next_spawn_in_seconds": {
+                "type": "null"
+              },
+              "estimated_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "const": "game"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "estimated_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "const": "schedule"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "next_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "next_spawn_in_seconds": {
+                "type": "null"
+              },
+              "estimated_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "objective_no_estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "present": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 128
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "game",
+            "schedule",
+            "unknown"
+          ]
+        },
+        "next_spawn_in_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 7200
+        },
+        "estimated_spawn_in_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 7200
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "present"
+            ],
+            "properties": {
+              "present": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "next_spawn_in_seconds": {
+                "type": "null"
+              },
+              "estimated_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "const": "game"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "estimated_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "const": "schedule"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "next_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "next_spawn_in_seconds": {
+                "type": "null"
+              },
+              "estimated_spawn_in_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "estimated_spawn_in_seconds": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "objectives": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "midboss": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/objective_no_estimate"
+            }
+          ]
+        },
+        "urn": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/objective_no_estimate"
+            }
+          ]
+        },
+        "rift": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/objective_no_estimate"
+            }
+          ]
+        },
+        "bridge_buffs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/objective"
+            }
+          ]
+        }
+      }
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "capabilities",
+        "scoreboard",
+        "teams",
+        "own_loadout",
+        "structures",
+        "objectives"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "scoreboard",
+              "teams",
+              "own_loadout",
+              "structures",
+              "objectives",
+              "timer_provenance"
+            ]
+          },
+          "minItems": 6,
+          "maxItems": 6,
+          "uniqueItems": true
+        },
+        "scoreboard": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scoreboard"
+          },
+          "minItems": 1,
+          "maxItems": 12,
+          "contains": {
+            "type": "object",
+            "required": [
+              "is_local"
+            ],
+            "properties": {
+              "is_local": {
+                "const": true
+              }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        "teams": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/team"
+          },
+          "minItems": 0,
+          "maxItems": 2,
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "side"
+                ],
+                "properties": {
+                  "side": {
+                    "const": "own"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "side"
+                ],
+                "properties": {
+                  "side": {
+                    "const": "enemy"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            }
+          ]
+        },
+        "own_loadout": {
+          "$ref": "#/$defs/loadout"
+        },
+        "structures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/structure"
+          },
+          "minItems": 0,
+          "maxItems": 48
+        },
+        "objectives": {
+          "$ref": "#/$defs/objectives"
+        }
+      }
+    }
+  }
+}

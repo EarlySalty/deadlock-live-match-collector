@@ -4,11 +4,23 @@ import re
 import subprocess
 import sys
 
-ENDPOINT = "https://deutsche-deadlock-community.de/twitch/api/v2/live-match"
-SUMMARY = {
-    "match_id": "1", "hero": "Infernus", "game_seconds": 60,
-    "kills": 0, "deaths": 0, "assists": 0, "team_souls": 0, "enemy_souls": 0,
+ENDPOINT = "https://deutsche-deadlock-community.de/twitch/api/v3/live-match"
+MAX_BODY_BYTES = 32768
+PREFLIGHT_PAYLOAD = {
+    "schema_version": 3,
+    "writer_id": "123e4567-e89b-42d3-a456-426614174000",
+    "sequence": 1,
+    "match_epoch": 1,
+    "hero": "Infernus",
+    "game_seconds": 42,
 }
+
+
+def encode_preflight_payload():
+    body = json.dumps(PREFLIGHT_PAYLOAD, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(body) > MAX_BODY_BYTES:
+        raise ValueError(f"API preflight body exceeds {MAX_BODY_BYTES} UTF-8 bytes")
+    return body
 
 
 def preflight(url=ENDPOINT, timeout=10):
@@ -18,14 +30,15 @@ def preflight(url=ENDPOINT, timeout=10):
          "--connect-timeout", str(min(5, timeout)), "--max-time", str(timeout),
          "--output", os.devnull, "--write-out", "%{http_code}", "--request", "POST",
          "--header", "Content-Type: application/json",
-         "--data-binary", json.dumps(SUMMARY), url],
+         "--data-binary", "@-", url],
+        input=encode_preflight_payload().decode("utf-8"), encoding="utf-8",
         capture_output=True, text=True, timeout=timeout + 5,
     )
     if result.returncode != 0:
         raise ValueError(f"API preflight transport failed (curl {result.returncode})")
     if result.stdout != "401":
         raise ValueError(f"API preflight expected HTTP 401, received {result.stdout}")
-    print("API preflight: HTTP 401 (unauthenticated summary only; not E2E evidence)")
+    print("API v3 preflight: HTTP 401 (unauthenticated routing/auth only; not schema or E2E evidence)")
 
 
 def command_json(*args):
@@ -92,11 +105,13 @@ def require_tag(tag, sha, ref, version, remote_refs):
     refs = {}
     for line in remote_refs.splitlines():
         commit, name = line.split("\t")
-        if name not in (expected_ref, expected_ref + "^{}") or name in refs:
+        if name not in ("refs/heads/main", expected_ref, expected_ref + "^{}") or name in refs:
             raise ValueError("Unexpected remote tag reference")
         if not re.fullmatch(r"[0-9a-f]{40}", commit):
             raise ValueError("Invalid tag object SHA")
         refs[name] = commit
+    if refs.get("refs/heads/main") != sha:
+        raise ValueError("Remote main no longer equals the dispatched release commit")
     if expected_ref not in refs or refs.get(expected_ref + "^{}", refs[expected_ref]) != sha:
         raise ValueError("Remote tag does not resolve to the dispatched main commit")
 
@@ -110,7 +125,7 @@ def check_tag():
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise ValueError("Invalid release tag")
     remote = subprocess.check_output(
-        ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
+        ["git", "ls-remote", "origin", "refs/heads/main", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
         text=True,
     )
     require_tag(tag, sha, ref, version, remote)
@@ -118,7 +133,7 @@ def check_tag():
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     if head != sha:
         raise ValueError("Checkout does not match the release commit")
-    print(f"Remote tag {tag} resolves to checked-out main commit {sha}")
+    print(f"Remote main and tag {tag} resolve to checked-out commit {sha}")
 
 
 def main():
