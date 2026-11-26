@@ -230,7 +230,14 @@ class DraftTests(unittest.TestCase):
                     else:
                         self.assertEqual(result.returncode, 0, result.stderr.decode())
                         self.assertIn("gh release create v0.2.0 --draft --verify-tag", calls)
-                        self.assertTrue(calls.splitlines()[-1].startswith("gh release create"))
+                        self.assertTrue(calls.splitlines()[-2].startswith("gh release create"))
+                        self.assertTrue(calls.splitlines()[-1].startswith("python3 packaging/verify_draft.py"))
+            log.write_text("")
+            result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)],
+                                    cwd=root, env=dict(env, MOCK_FAIL="verify_draft.py"), capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("gh release create", log.read_text())
+            self.assertTrue(log.read_text().splitlines()[-1].startswith("python3 packaging/verify_draft.py"))
             log.write_text("")
             result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)],
                                     cwd=root, env=dict(env, RELEASE_MODE="prerelease", MOCK_FAIL="release_checks.py preflight"), capture_output=True)
@@ -242,6 +249,19 @@ class DraftTests(unittest.TestCase):
                                     cwd=root, env=dict(env, RELEASE_MODE="unknown"), capture_output=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn("gh release create", log.read_text())
+            log.write_text("")
+            for fail in ("attestation verify", "release_checks.py tag", "release_checks.py ci",
+                         "release_checks.py preflight", "virustotal_report.py dist --verify",
+                         "dependency_evidence.py dist --verify", "verify_draft.py", ""):
+                with self.subTest(prepublish_fail=fail):
+                    log.write_text("")
+                    result = subprocess.run(["bash", "packaging/verify-before-publish.sh", str(archive)],
+                                            cwd=root, env=dict(env, MOCK_FAIL=fail), capture_output=True)
+                    calls = log.read_text()
+                    self.assertEqual(result.returncode == 0, not fail)
+                    self.assertNotIn("gh release ", calls)
+                    if not fail:
+                        self.assertTrue(calls.splitlines()[-1].startswith("python3 packaging/verify_draft.py"))
             log.write_text("")
             standalone.write_bytes(b"different synthetic executable")
             (root / "dist" / "SHA256SUMS.exe").write_text(f"{hashlib.sha256(standalone.read_bytes()).hexdigest()}  live-match-collector.exe\n")

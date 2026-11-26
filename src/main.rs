@@ -2,10 +2,11 @@ mod game_model;
 mod game_source;
 mod independent_source;
 mod limits;
+mod secret;
 mod telemetry;
 
 use std::collections::HashSet;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::mem::discriminant;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -36,6 +37,7 @@ struct Writer {
     current: Option<u64>,
     seen: HashSet<u64>,
     expired_epoch: Option<u64>,
+    exhausted: bool,
 }
 
 impl Writer {
@@ -47,10 +49,14 @@ impl Writer {
             current: None,
             seen: HashSet::new(),
             expired_epoch: None,
+            exhausted: false,
         }
     }
 
     fn observe(&mut self, id: u64) -> Result<(), Status> {
+        if self.exhausted {
+            return Err(Status::CounterExhausted);
+        }
         if self.current == Some(id) {
             return if self.expired_epoch == Some(self.epoch) {
                 Err(Status::EpochExpired)
@@ -60,6 +66,10 @@ impl Writer {
         }
         if self.seen.contains(&id) {
             return Err(Status::OldMatch);
+        }
+        if self.seen.len() >= limits::MATCH_HISTORY {
+            self.exhausted = true;
+            return Err(Status::CounterExhausted);
         }
         self.epoch = next_counter(self.epoch)?;
         self.seen.insert(id);
@@ -73,6 +83,9 @@ impl Writer {
     }
 
     fn packet(&mut self, observation: Observation) -> Result<Payload, Status> {
+        if self.exhausted {
+            return Err(Status::CounterExhausted);
+        }
         if self.expired_epoch == Some(self.epoch) {
             return Err(Status::EpochExpired);
         }
@@ -230,68 +243,7 @@ fn read(source: &mut impl GameSource, writer: &mut Writer) -> Result<Observation
     prepare(sample.as_ref(), writer)
 }
 
-const UNREADABLE_KEY: &str = "Der Verbindungsschlüssel konnte nicht gelesen werden.";
-
-fn checked_token(input: &str) -> Result<String, &'static str> {
-    let token = input.trim();
-    if token.is_empty() {
-        return Err("Es wurde kein Verbindungsschlüssel eingegeben.");
-    }
-    if !token.strip_prefix("dlm_").is_some_and(|suffix| {
-        suffix.len() == 64 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
-    }) {
-        return Err("Der Verbindungsschlüssel hat ein ungültiges Format. Kopiere ihn vollständig aus dem Overlay-Baukasten.");
-    }
-    Ok(token.to_owned())
-}
-
-fn prompt_token(
-    interactive: bool,
-    mut input: impl FnMut() -> io::Result<String>,
-    mut report: impl FnMut(&str),
-) -> Result<String, &'static str> {
-    loop {
-        let value = input().map_err(|_| UNREADABLE_KEY)?;
-        match checked_token(&value) {
-            Ok(token) => return Ok(token),
-            Err(reason) if interactive => report(reason),
-            Err(reason) => return Err(reason),
-        }
-    }
-}
-
-fn read_token() -> Result<String, &'static str> {
-    let interactive = io::stdin().is_terminal();
-    prompt_token(
-        interactive,
-        || {
-            if interactive {
-                {
-                    let mut output = io::stderr().lock();
-                    write!(output, "Verbindungsschlüssel: ")?;
-                    output.flush()?;
-                }
-                rpassword::read_password()
-            } else {
-                let mut input = String::new();
-                if io::stdin().read_line(&mut input)? == 0 {
-                    return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
-                }
-                Ok(input)
-            }
-        },
-        |reason| eprintln!("{reason}"),
-    )
-}
-
 fn finish(code: i32) -> ! {
-    if io::stdin().is_terminal() && io::stderr().is_terminal() {
-        let _ = writeln!(
-            io::stderr(),
-            "Drücke die Eingabetaste, um das Programm zu schließen."
-        );
-        let _ = io::stdin().read_line(&mut String::new());
-    }
     std::process::exit(code)
 }
 
@@ -342,11 +294,33 @@ fn outcome(code: Option<u16>) -> Result<Status, FatalUpload> {
 }
 
 fn encode_body(data: &impl Serialize) -> Result<Vec<u8>, Status> {
-    let body = serde_json::to_vec(data).map_err(|_| Status::InvalidBody)?;
-    if body.len() > limits::BODY_BYTES {
+    struct BoundedBody {
+        bytes: Vec<u8>,
+        exceeded: bool,
+    }
+    impl Write for BoundedBody {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if buf.len() > limits::BODY_BYTES - self.bytes.len() {
+                self.exceeded = true;
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut body = BoundedBody {
+        bytes: Vec::with_capacity(limits::BODY_BYTES),
+        exceeded: false,
+    };
+    let result = serde_json::to_writer(&mut body, data);
+    if body.exceeded {
         return Err(Status::BodyTooLarge);
     }
-    Ok(body)
+    result.map_err(|_| Status::InvalidBody)?;
+    Ok(body.bytes)
 }
 
 fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
@@ -431,6 +405,7 @@ impl RetryPacing {
 
 fn client_builder() -> reqwest::blocking::ClientBuilder {
     Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .timeout(REQUEST_TIMEOUT)
@@ -454,10 +429,6 @@ fn run() {
     let mut source = match BlockedSource::open() {
         Ok(source) => source,
         Err(error) => leave(&source_status(error).message(), 1),
-    };
-    let token = match read_token() {
-        Ok(token) => token,
-        Err(reason) => leave(reason, 1),
     };
     #[cfg(feature = "internal-test")]
     eprintln!("Interner Test: ausschließlich HTTPS über localhost:8443.");
@@ -487,6 +458,10 @@ fn run() {
             1,
         ),
     };
+    let token = match secret::read_token() {
+        Ok(token) => token,
+        Err(reason) => leave(reason, 1),
+    };
     let mut announcer = Announcer::new();
     let mut pacing = RetryPacing::new();
     let mut writer = Writer::new();
@@ -500,11 +475,20 @@ fn run() {
                         (Status::EpochExpired, hint)
                     }
                     Ok(result) => result,
-                    Err(fatal) => leave(fatal.message(), 1),
+                    Err(fatal) => {
+                        drop(token);
+                        leave(fatal.message(), 1)
+                    }
                 },
-                Err(status) => leave(&status.message(), 1),
+                Err(status) => {
+                    drop(token);
+                    leave(&status.message(), 1)
+                }
             },
-            Err(Status::CounterExhausted) => leave(&Status::CounterExhausted.message(), 1),
+            Err(Status::CounterExhausted) => {
+                drop(token);
+                leave(&Status::CounterExhausted.message(), 1)
+            }
             Err(status) => (status, None),
         };
         let delay = pacing.after(&status, hint);
@@ -779,14 +763,15 @@ mod tests {
         }
         let local = &mut s.players[0];
         local.items = Some(vec![u32::MAX; limits::ITEMS]);
-        local.ability_upgrades = Some(vec![
-            AbilityUpgrade {
-                item_id: u32::MAX,
-                unlocked: true,
-                points: limits::ABILITY_POINTS
-            };
-            limits::ABILITY_UPGRADES
-        ]);
+        local.ability_upgrades = Some(
+            (0..limits::ABILITY_UPGRADES as u32)
+                .map(|i| AbilityUpgrade {
+                    item_id: u32::MAX - i,
+                    unlocked: true,
+                    points: limits::ABILITY_POINTS,
+                })
+                .collect(),
+        );
         local.health = Some(1_000_000);
         local.max_health = Some(1_000_000);
         local.ability_points = Some(limits::STAT);
@@ -850,7 +835,7 @@ mod tests {
             )
             .unwrap();
         });
-        let client = client_builder().no_proxy().build().unwrap();
+        let client = client_builder().build().unwrap();
         assert_eq!(
             upload(&client, &endpoint, "synthetic-test-only", &data),
             Ok((Status::Sending, None))
@@ -1056,61 +1041,150 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_service_key_shape() {
-        let token = format!("dlm_{}", "aB09".repeat(16));
-        assert_eq!(checked_token(&format!("  {token}\r\n")).unwrap(), token);
-        for invalid in [
-            String::new(),
-            " \r\n".to_owned(),
-            "dlm_abc123".to_owned(),
-            "https://example.invalid/overlay".to_owned(),
-            format!("DLM_{}", "a".repeat(64)),
-            format!("dlm_{}", "a".repeat(63)),
-            format!("dlm_{}", "a".repeat(65)),
-            format!("dlm_{}g", "a".repeat(63)),
-            format!("dlm_{} ", "a ".repeat(32)),
-            format!("dlm_{}", "ü".repeat(32)),
-        ] {
-            assert!(checked_token(&invalid).is_err());
+    fn writer_history_exhaustion_is_permanent_and_never_evicts() {
+        let mut writer = Writer::new();
+        for id in 1..=limits::MATCH_HISTORY as u64 {
+            assert_eq!(writer.observe(id), Ok(()));
         }
+        assert_eq!(writer.observe(1), Err(Status::OldMatch));
+        assert_eq!(writer.observe(limits::MATCH_HISTORY as u64), Ok(()));
+        assert_eq!(
+            writer.observe(limits::MATCH_HISTORY as u64 + 1),
+            Err(Status::CounterExhausted)
+        );
+        assert_eq!(writer.seen.len(), limits::MATCH_HISTORY);
+        assert_eq!(writer.observe(1), Err(Status::CounterExhausted));
+        assert_eq!(
+            writer.observe(limits::MATCH_HISTORY as u64),
+            Err(Status::CounterExhausted)
+        );
+        assert!(matches!(
+            writer.packet(observation(&snapshot()).unwrap()),
+            Err(Status::CounterExhausted)
+        ));
     }
 
     #[test]
-    fn interactive_key_input_reprompts_but_eof_and_piped_errors_stop() {
-        let valid = format!("dlm_{}", "f".repeat(64));
-        let mut inputs = [
-            Ok(" ".to_owned()),
-            Ok("dlm_abc".to_owned()),
-            Ok(valid.clone()),
-        ]
-        .into_iter();
-        let mut reports = 0;
+    fn raw_snapshot_bounds_and_known_duplicates_fail_closed() {
+        let mut s = snapshot();
+        s.players
+            .resize(limits::SCOREBOARD_ROWS + 1, PlayerSample::default());
+        assert_eq!(observation(&s), Err(Status::Unreadable));
+        let mut s = snapshot();
+        s.teams.resize(limits::TEAM_ROWS + 1, TeamSample::default());
+        s.structures
+            .resize(limits::STRUCTURE_ROWS + 1, StructureSample::default());
+        s.players[0].items = Some(vec![0; limits::ITEMS + 1]);
+        s.players[0].ability_upgrades = Some(vec![
+            AbilityUpgrade::default();
+            limits::ABILITY_UPGRADES + 1
+        ]);
+        let b = packet(&s, &mut Writer::new());
+        assert_eq!(b["details"]["teams"], json!([]));
+        assert_eq!(b["details"]["structures"], json!([]));
+        assert!(b["details"]["own_loadout"]["items"].is_null());
+        assert!(b["details"]["own_loadout"]["ability_upgrades"].is_null());
+        let mut s = snapshot();
+        s.teams = vec![
+            TeamSample {
+                team: Team::Own,
+                ..Default::default()
+            };
+            2
+        ];
         assert_eq!(
-            prompt_token(true, || inputs.next().unwrap(), |_| reports += 1),
-            Ok(valid)
+            packet(&s, &mut Writer::new())["details"]["teams"],
+            json!([])
         );
-        assert_eq!(reports, 2);
-        let mut reads = 0;
-        assert!(prompt_token(
-            false,
-            || {
-                reads += 1;
-                Ok("dlm_abc".to_owned())
-            },
-            |_| panic!("piped input must not reprompt")
-        )
-        .is_err());
-        assert_eq!(reads, 1);
-        for interactive in [true, false] {
-            assert_eq!(
-                prompt_token(
-                    interactive,
-                    || Err(io::ErrorKind::UnexpectedEof.into()),
-                    |_| panic!("EOF must not reprompt")
-                ),
-                Err(UNREADABLE_KEY)
-            );
+        s.players[0].slot = Some(1);
+        s.players[1].slot = Some(1);
+        assert!(observation(&s).is_ok());
+        s.players.push(PlayerSample {
+            team: Some(Team::Own),
+            slot: Some(1),
+            ..Default::default()
+        });
+        s.expected_player_count = Some(3);
+        assert_eq!(observation(&s), Err(Status::Unreadable));
+    }
+
+    #[test]
+    fn duplicate_ability_ids_omit_ambiguous_optional_group() {
+        let mut s = snapshot();
+        s.players[0].ability_upgrades = Some(vec![
+            AbilityUpgrade {
+                item_id: 1,
+                unlocked: true,
+                points: 1
+            };
+            2
+        ]);
+        let data = packet(&s, &mut Writer::new());
+        assert!(data["details"]["own_loadout"]["ability_upgrades"].is_null());
+    }
+
+    #[test]
+    fn proxy_environment_is_ignored_by_shared_client_builder() {
+        const CHILD: &str = "COLLECTOR_PROXY_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::proxy_environment_is_ignored_by_shared_client_builder",
+                ])
+                .env(CHILD, "1")
+                .env("HTTP_PROXY", "http://127.0.0.1:1")
+                .env("http_proxy", "http://127.0.0.1:1")
+                .env("HTTPS_PROXY", "http://127.0.0.1:1")
+                .env("https_proxy", "http://127.0.0.1:1")
+                .env("ALL_PROXY", "http://127.0.0.1:1")
+                .env("all_proxy", "http://127.0.0.1:1")
+                .env_remove("NO_PROXY")
+                .env_remove("no_proxy")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
         }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!(
+            "http://{}/twitch/api/v3/live-match",
+            listener.local_addr().unwrap()
+        );
+        let client = client_builder().build().unwrap();
+        let sender = thread::spawn(move || {
+            upload(
+                &client,
+                &endpoint,
+                "synthetic-test-only",
+                &serde_json::json!({"test": true}),
+            )
+        });
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(10))
+                }
+                Err(e) => panic!("direct connection missing: {e}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let _ = read_mock_post(&mut stream);
+        write!(
+            stream,
+            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        assert_eq!(sender.join().unwrap(), Ok((Status::Sending, None)));
     }
 
     #[test]
@@ -1267,7 +1341,7 @@ mod tests {
                 write!(stream, "HTTP/1.1 {response}\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
             }
         });
-        let client = client_builder().no_proxy().build().unwrap();
+        let client = client_builder().build().unwrap();
         assert_eq!(
             upload(&client, &endpoint, "synthetic-test-only", &payloads[0]),
             Ok((Status::Rejected(429), Some(Duration::from_secs(1))))
@@ -1315,7 +1389,7 @@ mod tests {
                 write!(stream, "HTTP/1.1 409 Conflict\r\n{headers}Content-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
             }
         });
-        let client = client_builder().no_proxy().build().unwrap();
+        let client = client_builder().build().unwrap();
         let mut writer = Writer::new();
         let s = snapshot();
         assert_eq!(
@@ -1370,7 +1444,6 @@ mod tests {
             .unwrap();
         });
         let client = client_builder()
-            .no_proxy()
             .timeout(Duration::from_millis(300))
             .build()
             .unwrap();
@@ -1429,7 +1502,7 @@ mod tests {
             "http://{}/twitch/api/v3/live-match",
             listener.local_addr().unwrap()
         );
-        let client = client_builder().no_proxy().build().unwrap();
+        let client = client_builder().build().unwrap();
         assert_eq!(
             upload(
                 &client,

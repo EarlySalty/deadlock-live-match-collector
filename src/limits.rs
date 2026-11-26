@@ -1,5 +1,6 @@
 use std::ops::RangeInclusive;
 
+pub const MATCH_HISTORY: usize = 4096;
 pub const BODY_BYTES: usize = 32_768;
 pub const SCHEMA_VERSION: u8 = 3;
 pub const MAX_COUNTER: u64 = 9_007_199_254_740_991;
@@ -42,6 +43,9 @@ pub fn clock_seconds(value: Option<f32>) -> Option<u32> {
 }
 
 pub fn hero_name(value: &str) -> Option<&str> {
+    if value.len() > HERO_NAME_BYTES + 16 {
+        return None;
+    }
     let name = value.trim();
     let fits = (1..=HERO_NAME_BYTES).contains(&name.len());
     (fits && !name.chars().any(char::is_control)).then_some(name)

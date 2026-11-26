@@ -98,14 +98,15 @@ fn all_visible_fields_and_limits_survive_serialization() {
     p.neutral_souls = Some(8);
     p.farm_baseline = Some(9);
     p.kill_streak = Some(10);
-    p.ability_upgrades = Some(vec![
-        AbilityUpgrade {
-            item_id: u32::MAX,
-            unlocked: true,
-            points: 5
-        };
-        16
-    ]);
+    p.ability_upgrades = Some(
+        (0..16)
+            .map(|i| AbilityUpgrade {
+                item_id: u32::MAX - i,
+                unlocked: true,
+                points: 5,
+            })
+            .collect(),
+    );
     s.teams = [Team::Own, Team::Enemy]
         .into_iter()
         .map(|team| TeamSample {

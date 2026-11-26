@@ -43,11 +43,7 @@ def locked_blocked(lock):
 
 def main():
     out = Path(sys.argv[1])
-    if "--verify" in sys.argv[2:]:
-        evidence = json.loads((out / "dependency-gate.json").read_text())
-        return int(evidence != {"source": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-                                "lock_sha256": digest("Cargo.lock"), "sbom_sha256": digest(out / "cargo-sbom.cdx.json"),
-                                "blocked": [], "exit_code": 0})
+    verify = "--verify" in sys.argv[2:]
     out.mkdir(parents=True, exist_ok=True)
     command = ["cargo", "metadata", "--locked", "--all-features", "--format-version", "1"]
     if "--offline" in sys.argv[2:]:
@@ -59,14 +55,24 @@ def main():
         data = json.loads(subprocess.check_output(command))
         sbom, graph_blocked = inventory(data)
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        if verify:
+            return 1
         (out / "dependency-gate.json").write_text(json.dumps({"source": source, "lock_sha256": lock,
             "blocked": blocked, "exit_code": 1, "status": "metadata unavailable or invalid"}, indent=2) + "\n")
         return 1
     blocked = sorted(set(graph_blocked) | set(blocked))
-    (out / "cargo-sbom.cdx.json").write_text(json.dumps(sbom, indent=2) + "\n")
+    sbom_bytes = (json.dumps(sbom, indent=2) + "\n").encode("utf-8")
     evidence = {"source": source,
-                "lock_sha256": lock, "sbom_sha256": digest(out / "cargo-sbom.cdx.json"),
+                "lock_sha256": lock, "sbom_sha256": hashlib.sha256(sbom_bytes).hexdigest(),
                 "blocked": blocked, "exit_code": int(bool(blocked))}
+    if verify:
+        try:
+            return int(bool(blocked)
+                       or (out / "cargo-sbom.cdx.json").read_bytes() != sbom_bytes
+                       or json.loads((out / "dependency-gate.json").read_text()) != evidence)
+        except (OSError, ValueError):
+            return 1
+    (out / "cargo-sbom.cdx.json").write_bytes(sbom_bytes)
     (out / "dependency-gate.json").write_text(json.dumps(evidence, indent=2) + "\n")
     return evidence["exit_code"]
 

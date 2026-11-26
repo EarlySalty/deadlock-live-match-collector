@@ -60,11 +60,10 @@ jobs:
     environment: release
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
       actions: read
-      id-token: write
-      attestations: write
     env:
+      CLAMAV_IMAGE: ${{ vars.RELEASE_CLAMAV_IMAGE }}
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
       RELEASE_MODE: ${{ (inputs.prerelease) && 'prerelease' || 'stable' }}
     steps:
@@ -101,6 +100,9 @@ jobs:
           cargo audit --deny warnings || status=$?
           printf 'cargo-audit-exit=%s\n' "$status" > dist/audit-status.txt
           exit "$status"
+      - name: Require owner-approved scanner image digest
+        run: |
+          [[ "$CLAMAV_IMAGE" =~ ^clamav/clamav@sha256:[0-9a-f]{64}$ ]]
       - name: Install Windows build tools
         run: |
           sudo apt-get update -qq
@@ -139,30 +141,9 @@ jobs:
             dist/virustotal-report.json
             dist/virustotal-report.md
             dist/audit-status.txt
-      - name: Attest the ZIP, EXE and SBOM
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: |
-            ${{ steps.package.outputs.archive }}
-            dist/live-match-collector.exe
-            dist/cargo-sbom.cdx.json
-      - name: Verify provenance and create draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARCHIVE: ${{ steps.package.outputs.archive }}
-        run: bash packaging/create-draft.sh "$ARCHIVE"
-      - name: Publish verified release
-        if: inputs.publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARCHIVE: ${{ steps.package.outputs.archive }}
+      # The build/scan job must never receive release-write or OIDC permissions.
+      # A separate protected job needs an approved private, digest-bound transfer.
+      - name: Block privileged release handoff until private transfer is approved
         run: |
-          python3 packaging/release_checks.py tag
-          python3 packaging/release_checks.py ci
-          if [[ "$RELEASE_MODE" == stable ]]; then
-            python3 packaging/release_checks.py preflight
-          fi
-          bash packaging/verify-package.sh "$ARCHIVE"
-          python3 packaging/virustotal_report.py dist --verify
-          python3 packaging/dependency_evidence.py dist --verify
-          gh release edit "$RELEASE_TAG" --draft=false
+          echo 'Release blocked: no approved private artifact handoff to a protected publisher.' >&2
+          exit 1

@@ -219,6 +219,9 @@ fn team(s: &GameSnapshot, stats: &TeamSample, local: Team) -> Option<TeamRow> {
 }
 
 fn teams(s: &GameSnapshot, local: Team) -> Vec<TeamRow> {
+    if s.teams.len() > limits::TEAM_ROWS {
+        return Vec::new();
+    }
     let rows = s
         .teams
         .iter()
@@ -244,6 +247,9 @@ fn structure_kind(kind: StructureKind) -> Option<&'static str> {
 }
 
 fn structures(s: &GameSnapshot, local: Team) -> Vec<StructureRow> {
+    if s.structures.len() > limits::STRUCTURE_ROWS {
+        return Vec::new();
+    }
     let rows = s
         .structures
         .iter()
@@ -285,11 +291,13 @@ fn local_loadout(local: &PlayerSample) -> OwnLoadout {
     let items = local
         .items
         .as_ref()
+        .filter(|v| v.len() <= limits::ITEMS)
         .map(|v| v.iter().copied().filter(|id| *id > 0).collect::<Vec<_>>())
         .filter(|v| v.len() <= limits::ITEMS);
     let ability_upgrades = local
         .ability_upgrades
         .as_ref()
+        .filter(|v| v.len() <= limits::ABILITY_UPGRADES)
         .map(|v| {
             v.iter()
                 .filter(|a| a.item_id > 0)
@@ -303,6 +311,10 @@ fn local_loadout(local: &PlayerSample) -> OwnLoadout {
         .filter(|v| {
             v.len() <= limits::ABILITY_UPGRADES
                 && v.iter().all(|a| a.points <= limits::ABILITY_POINTS)
+                && !v
+                    .iter()
+                    .enumerate()
+                    .any(|(i, row)| v[..i].iter().any(|prev| prev.item_id == row.item_id))
         });
     OwnLoadout {
         level: limits::within(local.level, limits::LEVEL),
@@ -323,7 +335,8 @@ fn local_loadout(local: &PlayerSample) -> OwnLoadout {
 
 pub fn collect(s: &GameSnapshot, local: &PlayerSample) -> Option<MatchDetails> {
     let local_team = local.team.filter(|team| *team == Team::Own)?;
-    if !std::ptr::eq(local_player(s)?, local) || !complete_roster(s, local) {
+    if !bounded_snapshot(s) || !std::ptr::eq(local_player(s)?, local) || !complete_roster(s, local)
+    {
         return None;
     }
     let scoreboard = s
@@ -416,6 +429,15 @@ impl Payload {
     }
 }
 
+// Bound core input before roster traversal; optional groups are bounded
+// independently and become unavailable rather than inventing values.
+fn bounded_snapshot(s: &GameSnapshot) -> bool {
+    s.players.len() <= limits::SCOREBOARD_ROWS
+        && s.local_hero_name
+            .as_ref()
+            .is_none_or(|name| name.len() <= limits::HERO_NAME_BYTES + 16)
+}
+
 fn local_player(s: &GameSnapshot) -> Option<&PlayerSample> {
     let mut locals = s.players.iter().filter(|row| row.is_local == Some(true));
     let player = locals.next()?;
@@ -430,11 +452,20 @@ fn complete_roster(s: &GameSnapshot, player: &PlayerSample) -> bool {
     let Some(opponent) = team.opponent() else {
         return false;
     };
+    let mut slots = [[false; limits::SCOREBOARD_ROWS]; 2];
     let mut count = 0;
     let mut own = false;
     let mut enemy = false;
     for row in s.players.iter().filter(|row| !row.is_spectator) {
         count += 1;
+        if let Some(slot) = row.slot.filter(|slot| limits::SLOTS.contains(slot)) {
+            let side = usize::from(row.team != Some(team));
+            let seen = &mut slots[side][slot as usize - 1];
+            if *seen {
+                return false;
+            }
+            *seen = true;
+        }
         match row.team {
             Some(side) if side == team => own = true,
             Some(side) if side == opponent => enemy = true,
@@ -477,6 +508,9 @@ pub fn observation(s: &GameSnapshot) -> Option<Observation> {
         || s.eligibility != Eligibility::Eligible
         || !s.match_token.is_some_and(|token| token > 0)
     {
+        return None;
+    }
+    if !bounded_snapshot(s) {
         return None;
     }
     let player = local_player(s)?;
