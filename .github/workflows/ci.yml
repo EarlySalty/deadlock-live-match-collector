@@ -20,6 +20,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Scan committed history for secrets
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+      - name: Audit locked Rust dependencies
+        run: |
+          cargo install --locked cargo-audit --version 0.23.0
+          cargo audit --deny warnings
       - name: Install Windows build tools
         run: |
           sudo apt-get update -qq

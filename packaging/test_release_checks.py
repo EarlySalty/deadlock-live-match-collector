@@ -231,6 +231,17 @@ class DraftTests(unittest.TestCase):
                         self.assertIn("gh release create v0.2.0 --draft --verify-tag", calls)
                         self.assertTrue(calls.splitlines()[-1].startswith("gh release create"))
             log.write_text("")
+            result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)],
+                                    cwd=root, env=dict(env, RELEASE_MODE="prerelease", MOCK_FAIL="release_checks.py preflight"), capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertIn("--prerelease --latest=false", log.read_text())
+            self.assertNotIn("release_checks.py preflight", log.read_text())
+            log.write_text("")
+            result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)],
+                                    cwd=root, env=dict(env, RELEASE_MODE="unknown"), capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("gh release create", log.read_text())
+            log.write_text("")
             standalone.write_bytes(b"different synthetic executable")
             (root / "dist" / "SHA256SUMS.exe").write_text(f"{hashlib.sha256(standalone.read_bytes()).hexdigest()}  live-match-collector.exe\n")
             result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)], cwd=root, env=env, capture_output=True)

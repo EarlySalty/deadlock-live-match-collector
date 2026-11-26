@@ -13,8 +13,20 @@ gh attestation verify dist/live-match-collector.exe --repo "$GITHUB_REPOSITORY" 
   --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
 python3 packaging/release_checks.py tag
 python3 packaging/release_checks.py ci
-python3 packaging/release_checks.py preflight
-gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" \
-  --notes-file packaging/release-notes.md "$archive" dist/SHA256SUMS \
+release_flags=()
+notes=packaging/release-notes.md
+case "${RELEASE_MODE:-stable}" in
+  stable) python3 packaging/release_checks.py preflight ;;
+  prerelease)
+    release_flags=(--prerelease --latest=false)
+    notes=$(mktemp)
+    trap 'rm -f "$notes"' EXIT
+    printf '%s\n\n' '**Pre-release: the production API may not be deployed yet. Do not use for real matches until the backend and permitted game access are confirmed.**' > "$notes"
+    cat packaging/release-notes.md >> "$notes"
+    ;;
+  *) echo 'Invalid release mode' >&2; exit 2 ;;
+esac
+gh release create "$RELEASE_TAG" --draft --verify-tag "${release_flags[@]}" --title "$RELEASE_TAG" \
+  --notes-file "$notes" "$archive" dist/SHA256SUMS \
   dist/live-match-collector.exe dist/SHA256SUMS.exe \
   dist/clamav-report.txt dist/build-environment.txt
