@@ -20,13 +20,17 @@ target=x86_64-pc-windows-gnu
 # Both target directories must be absent before their respective build, and
 # each packaged EXE must match its independently generated target output.
 test ! -e "$work/first"
-archive=$(CARGO_TARGET_DIR="$work/first" bash packaging/package-win64.sh)
+test ! -e "$work/first-build"
+archive=$(CARGO_TARGET_DIR="$work/first" CARGO_BUILD_BUILD_DIR="$work/first-build" bash packaging/package-win64.sh)
+test -d "$work/first-build"
 test -s "$work/first/$target/release/live-match-collector.exe"
 cmp "$work/first/$target/release/live-match-collector.exe" dist/live-match-collector.exe
 cp "$archive" "$work/first.zip"
 cp dist/live-match-collector.exe "$work/first.exe"
 test ! -e "$work/second"
-archive=$(CARGO_TARGET_DIR="$work/second" bash packaging/package-win64.sh)
+test ! -e "$work/second-build"
+archive=$(CARGO_TARGET_DIR="$work/second" CARGO_BUILD_BUILD_DIR="$work/second-build" bash packaging/package-win64.sh)
+test -d "$work/second-build"
 test -s "$work/second/$target/release/live-match-collector.exe"
 cmp "$work/second/$target/release/live-match-collector.exe" dist/live-match-collector.exe
 # Expose the second package even if comparison fails so the independent local scan
@@ -43,7 +47,7 @@ status=0
   printf 'second_zip=%s\n' "$(sha256sum "$archive" | cut -d ' ' -f1)"
   cmp -s "$work/first.exe" dist/live-match-collector.exe || status=1
   cmp -s "$work/first.zip" "$archive" || status=1
-  printf 'target_dirs=two-fresh-distinct\ncompiler_wrappers=disabled\ncomparison_exit=%s\n' "$status"
+  printf 'target_dirs=two-fresh-distinct\nbuild_dirs=two-fresh-distinct\ncompiler_wrappers=disabled\ncomparison_exit=%s\n' "$status"
 } > dist/reproducibility.txt
 python3 -B packaging/check_pe.py dist/live-match-collector.exe > dist/pe-evidence.txt || status=1
 exit "$status"
