@@ -41,5 +41,4 @@ db="type=volume,src=$volume,dst=/var/lib/clamav"
     --mount "$db,readonly" \
     --mount "type=bind,src=$exe,dst=/scan/live-match-collector.exe,readonly" \
     "$scanner" --fail-if-cvd-older-than=7 /scan/live-match-collector.exe
-} | tee "$work/report"
-mv "$work/report" "$report"
+} | tee "$report"

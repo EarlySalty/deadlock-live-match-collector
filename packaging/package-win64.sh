@@ -55,7 +55,9 @@ if [[ "$profile" != release ]]; then
   rm -f "$out/live-match-collector.exe" "$out/SHA256SUMS.exe" "$out/build-environment.txt"
 fi
 if [[ "$profile" == release ]]; then
-  cargo build --locked --release --target "$target"
+  target_args=()
+  if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then target_args=(--target-dir "$CARGO_TARGET_DIR"); fi
+  cargo build --locked --release --target "$target" "${target_args[@]}"
 elif [[ "$profile" == verify ]]; then
   CARGO_SLOT_DEPLOY=0 "${CARGO_SLOT:-cargo-slot}" build --locked --target "$target" "${build_features[@]}"
 else

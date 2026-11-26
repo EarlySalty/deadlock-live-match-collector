@@ -81,42 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deadlock-core"
-version = "0.1.0"
-source = "git+https://github.com/deadlock-plus/deadlock-rs?rev=8b408b9103a022e7bac620bfa4916778b8fdfaa1#8b408b9103a022e7bac620bfa4916778b8fdfaa1"
-
-[[package]]
-name = "deadlock-data"
-version = "0.1.0"
-source = "git+https://github.com/deadlock-plus/deadlock-rs?rev=8b408b9103a022e7bac620bfa4916778b8fdfaa1#8b408b9103a022e7bac620bfa4916778b8fdfaa1"
-dependencies = [
- "deadlock-core",
- "serde",
- "serde_json",
- "source2",
-]
-
-[[package]]
-name = "deadlock-memory"
-version = "0.1.0"
-source = "git+https://github.com/deadlock-plus/deadlock-rs?rev=8b408b9103a022e7bac620bfa4916778b8fdfaa1#8b408b9103a022e7bac620bfa4916778b8fdfaa1"
-dependencies = [
- "libc",
- "memchr",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "deadlock-reader"
-version = "0.1.0"
-source = "git+https://github.com/deadlock-plus/deadlock-rs?rev=8b408b9103a022e7bac620bfa4916778b8fdfaa1#8b408b9103a022e7bac620bfa4916778b8fdfaa1"
-dependencies = [
- "deadlock-core",
- "deadlock-memory",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -465,16 +429,14 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 name = "live-match-collector"
 version = "0.2.1"
 dependencies = [
- "deadlock-core",
- "deadlock-data",
- "deadlock-reader",
  "httpdate",
+ "libc",
  "reqwest",
- "rpassword",
  "serde",
  "serde_json",
- "source2",
  "uuid",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -488,12 +450,6 @@ name = "lru-slab"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
-
-[[package]]
-name = "lz4_flex"
-version = "0.14.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f56455fff36934a9500d69062aec1c77037179b6f0669e4d5d6b72b84722d6a3"
 
 [[package]]
 name = "memchr"
@@ -700,27 +656,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rpassword"
-version = "7.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa2c5d9304b618df61ff17f3d3485c6e1854a3d94902a49abbb8d43dfbe0464"
-dependencies = [
- "libc",
- "rtoolbox",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "rtoolbox"
-version = "0.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a1efe12a1469752d0e6ff5ebec0b6ef4924cc5c4c71046b0ec730040535819d"
-dependencies = [
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -766,12 +701,6 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-
-[[package]]
-name = "ruzstd"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
 
 [[package]]
 name = "ryu"
@@ -861,36 +790,6 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "source2"
-version = "0.1.0"
-source = "git+https://github.com/deadlock-plus/source2-rs?rev=2b73748e7bc8d901cbdbef60d8d68ddaddd3159f#2b73748e7bc8d901cbdbef60d8d68ddaddd3159f"
-dependencies = [
- "source2-kv3",
- "source2-resource",
- "source2-vpk",
-]
-
-[[package]]
-name = "source2-kv3"
-version = "0.1.0"
-source = "git+https://github.com/deadlock-plus/source2-rs?rev=2b73748e7bc8d901cbdbef60d8d68ddaddd3159f#2b73748e7bc8d901cbdbef60d8d68ddaddd3159f"
-dependencies = [
- "lz4_flex",
- "ruzstd",
- "zstd-rs",
-]
-
-[[package]]
-name = "source2-resource"
-version = "0.1.0"
-source = "git+https://github.com/deadlock-plus/source2-rs?rev=2b73748e7bc8d901cbdbef60d8d68ddaddd3159f#2b73748e7bc8d901cbdbef60d8d68ddaddd3159f"
-
-[[package]]
-name = "source2-vpk"
-version = "0.1.0"
-source = "git+https://github.com/deadlock-plus/source2-rs?rev=2b73748e7bc8d901cbdbef60d8d68ddaddd3159f#2b73748e7bc8d901cbdbef60d8d68ddaddd3159f"
 
 [[package]]
 name = "stable_deref_trait"
@@ -1106,9 +1005,9 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 
 [[package]]
 name = "uuid"
-version = "1.29.0"
+version = "1.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -1226,15 +1125,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets",
 ]
@@ -1406,9 +1296,3 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
-
-[[package]]
-name = "zstd-rs"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41514ccc30389f95bb9e6ab6d5634f17121c7b4fead6722a5fceec1c7891d78f"

@@ -1,10 +1,6 @@
 name: Build and publish Windows release
 
 on:
-  workflow_run:
-    workflows: ['Check Windows build']
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
@@ -18,7 +14,11 @@ on:
       publish:
         description: Publish after all checks, rather than leaving a draft
         type: boolean
-        default: true
+        default: false
+      submit_to_virustotal:
+        description: Explicitly authorize submission of this exact release EXE to VirusTotal
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,18 +29,12 @@ concurrency:
 
 jobs:
   prepare:
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_repository.full_name == github.repository &&
-        github.event.workflow_run.head_sha == github.sha))
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Find exact release tag
@@ -58,7 +52,7 @@ jobs:
           fi
           sha=$(awk -v ref="refs/tags/$tag^{}" '$2==ref {print $1}' <<< "$refs")
           sha="${sha:-$(awk -v ref="refs/tags/$tag" '$2==ref {print $1}' <<< "$refs")}"
-          [[ "$sha" == "$GITHUB_SHA" ]] || exit 0
+          [[ "$sha" == "$GITHUB_SHA" ]]
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
   release:
     needs: prepare
@@ -66,18 +60,30 @@ jobs:
     environment: release
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
       actions: read
-      id-token: write
-      attestations: write
     env:
+      CLAMAV_IMAGE: ${{ vars.RELEASE_CLAMAV_IMAGE }}
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-      RELEASE_MODE: ${{ (github.event_name == 'workflow_run' || inputs.prerelease) && 'prerelease' || 'stable' }}
+      RELEASE_MODE: ${{ (inputs.prerelease) && 'prerelease' || 'stable' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Initialize evidence
+        run: |
+          mkdir -p dist
+          printf 'source=%s\nrun=%s\nattempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > dist/run-evidence.txt
+      # Remove this hard stop only in a separately reviewed commit with an authorized source.
+      - name: Block release while no authorized live source exists
+        run: |
+          echo 'Release blocked: no authorized complete live data source.' >&2
+          exit 1
+      - name: Require configured release protections
+        env:
+          RELEASE_SECURITY_APPROVED: ${{ vars.RELEASE_SECURITY_APPROVED }}
+        run: test "$RELEASE_SECURITY_APPROVED" = true
       - name: Require exact tag and successful CI
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,6 +93,16 @@ jobs:
           if [[ "$RELEASE_MODE" == stable ]]; then
             python3 packaging/release_checks.py preflight
           fi
+      - name: Audit locked Rust dependencies again
+        run: |
+          cargo install --locked cargo-audit --version 0.23.0
+          status=0
+          cargo audit --deny warnings || status=$?
+          printf 'cargo-audit-exit=%s\n' "$status" > dist/audit-status.txt
+          exit "$status"
+      - name: Require owner-approved scanner image digest
+        run: |
+          [[ "$CLAMAV_IMAGE" =~ ^clamav/clamav@sha256:[0-9a-f]{64}$ ]]
       - name: Install Windows build tools
         run: |
           sudo apt-get update -qq
@@ -98,6 +114,7 @@ jobs:
       - name: VirusTotal report for the exact packaged EXE
         env:
           VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+          VT_ALLOW_UPLOAD: ${{ inputs.submit_to_virustotal }}
         run: |
           result=0
           python3 packaging/virustotal_report.py dist || result=$?
@@ -105,25 +122,28 @@ jobs:
             cat dist/virustotal-report.md >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$result"
-      - name: Attest the ZIP and EXE
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+      - name: Retain text-only security evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          subject-path: |
-            ${{ steps.package.outputs.archive }}
-            dist/live-match-collector.exe
-      - name: Verify provenance and create draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARCHIVE: ${{ steps.package.outputs.archive }}
-        run: bash packaging/create-draft.sh "$ARCHIVE"
-      - name: Publish verified release
-        if: github.event_name == 'workflow_run' || inputs.publish
-        env:
-          GH_TOKEN: ${{ github.token }}
+          name: security-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            dist/run-evidence.txt
+            dist/SHA256SUMS
+            dist/SHA256SUMS.exe
+            dist/Cargo.lock.sha256
+            dist/build-environment.txt
+            dist/dependency-gate.json
+            dist/cargo-sbom.cdx.json
+            dist/clamav-report.txt
+            dist/virustotal-report.json
+            dist/virustotal-report.md
+            dist/audit-status.txt
+      # The build/scan job must never receive release-write or OIDC permissions.
+      # A separate protected job needs an approved private, digest-bound transfer.
+      - name: Block privileged release handoff until private transfer is approved
         run: |
-          python3 packaging/release_checks.py tag
-          python3 packaging/release_checks.py ci
-          if [[ "$RELEASE_MODE" == stable ]]; then
-            python3 packaging/release_checks.py preflight
-          fi
-          gh release edit "$RELEASE_TAG" --draft=false
+          echo 'Release blocked: no approved private artifact handoff to a protected publisher.' >&2
+          exit 1

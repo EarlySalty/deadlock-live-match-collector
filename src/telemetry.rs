@@ -1,10 +1,7 @@
-use deadlock_core::Team;
-use deadlock_data::HeroCatalog;
-use deadlock_reader::snapshot::{
-    GameMode, LiveSnapshot, ObjectiveKind, PlayerRow, StructureState, TeamStats,
+use crate::game_model::{
+    Eligibility, GameMode, GameSnapshot, MatchContext, ObjectiveTimer, PlayerSample, Provenance,
+    StructureKind, StructureState, Team, TeamSample, TimerSource,
 };
-use deadlock_reader::timers::{ObjectiveTimer, TimerSource};
-use deadlock_reader::HeroNames;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -30,7 +27,7 @@ pub enum Side {
 impl Side {
     pub fn of(team: Option<Team>, local: Team) -> Side {
         match team {
-            Some(team) if team == local => Side::Own,
+            Some(team) if team.is_playing() && team == local => Side::Own,
             Some(team) if local.opponent() == Some(team) => Side::Enemy,
             _ => Side::Unknown,
         }
@@ -157,16 +154,16 @@ fn stat(value: Option<u32>) -> Option<u32> {
     limits::within(value, limits::STAT)
 }
 
-fn scoreboard(row: &PlayerRow, local: Team) -> ScoreboardRow {
+fn scoreboard(row: &PlayerSample, local: Team) -> ScoreboardRow {
     let is_local = row.is_local == Some(true);
     let own = |value: Option<u32>| stat(value).filter(|_| is_local);
     ScoreboardRow {
         side: Side::of(row.team, local),
         is_local,
         slot: row.slot.filter(|slot| limits::SLOTS.contains(slot)),
-        hero_id: row.hero_id.map(|id| id.0).filter(|id| *id > 0),
+        hero_id: row.hero_id.filter(|id| *id > 0),
         level: limits::within(row.level, limits::LEVEL),
-        souls: stat(row.net_worth),
+        souls: stat(row.souls),
         kills: stat(row.kills),
         deaths: stat(row.deaths),
         assists: stat(row.assists),
@@ -175,34 +172,37 @@ fn scoreboard(row: &PlayerRow, local: Team) -> ScoreboardRow {
         hero_damage: own(row.hero_damage),
         objective_damage: own(row.objective_damage),
         healing: own(row.healing),
-        alive: row.is_alive,
+        alive: row.alive,
     }
 }
 
 fn sum_side(
-    s: &LiveSnapshot,
+    s: &GameSnapshot,
     team: Team,
-    field: impl Fn(&PlayerRow) -> Option<u32>,
+    field: impl Fn(&PlayerSample) -> Option<u32>,
     limit: u32,
 ) -> Option<u32> {
     let mut rows = s
-        .scoreboard()
+        .players
+        .iter()
         .filter(|r| !r.is_spectator && r.team == Some(team))
         .peekable();
     rows.peek()?;
-    let total = rows.try_fold(0u32, |sum, row| sum.checked_add(field(row)?))?;
+    let total = rows.try_fold(0u32, |sum, row| {
+        sum.checked_add(limits::within(field(row), limit)?)
+    })?;
     limits::within(Some(total), limit)
 }
 
-fn team(s: &LiveSnapshot, stats: &TeamStats, local: Team) -> Option<TeamRow> {
+fn team(s: &GameSnapshot, stats: &TeamSample, local: Team) -> Option<TeamRow> {
     let side = Side::of(Some(stats.team), local);
     if side == Side::Unknown {
         return None;
     }
-    let own = |value: u32| stat(Some(value)).filter(|_| side == Side::Own && stats.complete);
+    let own = |value: Option<u32>| stat(value).filter(|_| side == Side::Own && stats.complete);
     Some(TeamRow {
         side,
-        souls: sum_side(s, stats.team, |r| r.net_worth, limits::SOULS),
+        souls: sum_side(s, stats.team, |r| r.souls, limits::SOULS),
         ability_points: own(stats.ability_points),
         kills: sum_side(s, stats.team, |r| r.kills, limits::STAT),
         deaths: sum_side(s, stats.team, |r| r.deaths, limits::STAT),
@@ -213,19 +213,18 @@ fn team(s: &LiveSnapshot, stats: &TeamStats, local: Team) -> Option<TeamRow> {
         objective_damage: own(stats.objective_damage),
         healing: own(stats.healing),
         rejuvenators: limits::within(stats.rejuvenators, limits::REJUVENATORS),
-        structures_alive: limits::within(
-            stats.structures_known.then_some(stats.structures_alive),
-            limits::STRUCTURES_ALIVE,
-        ),
+        structures_alive: limits::within(stats.structures_alive, limits::STRUCTURES_ALIVE),
         complete: stats.complete,
     })
 }
 
-fn teams(s: &LiveSnapshot, local: Team) -> Vec<TeamRow> {
+fn teams(s: &GameSnapshot, local: Team) -> Vec<TeamRow> {
+    if s.teams.len() > limits::TEAM_ROWS {
+        return Vec::new();
+    }
     let rows = s
         .teams
         .iter()
-        .filter(|stats| stats.players > 0)
         .filter_map(|stats| team(s, stats, local))
         .collect::<Vec<_>>();
     let repeated = rows.len() == limits::TEAM_ROWS && rows[0].side == rows[1].side;
@@ -235,22 +234,24 @@ fn teams(s: &LiveSnapshot, local: Team) -> Vec<TeamRow> {
     rows
 }
 
-fn structure_kind(kind: ObjectiveKind) -> Option<&'static str> {
-    matches!(
-        kind,
-        ObjectiveKind::Guardian
-            | ObjectiveKind::Walker
-            | ObjectiveKind::BaseGuardian
-            | ObjectiveKind::Patron
-            | ObjectiveKind::Shrine
-            | ObjectiveKind::Midboss
-    )
-    .then(|| kind.label())
+fn structure_kind(kind: StructureKind) -> Option<&'static str> {
+    match kind {
+        StructureKind::Guardian => Some("guardian"),
+        StructureKind::Walker => Some("walker"),
+        StructureKind::BaseGuardian => Some("base_guardian"),
+        StructureKind::Patron => Some("patron"),
+        StructureKind::Shrine => Some("shrine"),
+        StructureKind::Midboss => Some("midboss"),
+        StructureKind::Unknown => None,
+    }
 }
 
-fn structures(s: &LiveSnapshot, local: Team) -> Vec<StructureRow> {
+fn structures(s: &GameSnapshot, local: Team) -> Vec<StructureRow> {
+    if s.structures.len() > limits::STRUCTURE_ROWS {
+        return Vec::new();
+    }
     let rows = s
-        .objectives
+        .structures
         .iter()
         .filter_map(|o| {
             Some(StructureRow {
@@ -271,7 +272,7 @@ fn structures(s: &LiveSnapshot, local: Team) -> Vec<StructureRow> {
     rows
 }
 
-fn objectives(s: &LiveSnapshot) -> ObjectiveRows {
+fn objectives(s: &GameSnapshot) -> ObjectiveRows {
     let normal = s.game_mode == Some(GameMode::Normal);
     let row = |timer: &Option<ObjectiveTimer>, may_estimate: bool| {
         normal
@@ -286,15 +287,17 @@ fn objectives(s: &LiveSnapshot) -> ObjectiveRows {
     }
 }
 
-fn local_loadout(local: &PlayerRow) -> OwnLoadout {
+fn local_loadout(local: &PlayerSample) -> OwnLoadout {
     let items = local
         .items
         .as_ref()
+        .filter(|v| v.len() <= limits::ITEMS)
         .map(|v| v.iter().copied().filter(|id| *id > 0).collect::<Vec<_>>())
         .filter(|v| v.len() <= limits::ITEMS);
     let ability_upgrades = local
         .ability_upgrades
         .as_ref()
+        .filter(|v| v.len() <= limits::ABILITY_UPGRADES)
         .map(|v| {
             v.iter()
                 .filter(|a| a.item_id > 0)
@@ -308,12 +311,16 @@ fn local_loadout(local: &PlayerRow) -> OwnLoadout {
         .filter(|v| {
             v.len() <= limits::ABILITY_UPGRADES
                 && v.iter().all(|a| a.points <= limits::ABILITY_POINTS)
+                && !v
+                    .iter()
+                    .enumerate()
+                    .any(|(i, row)| v[..i].iter().any(|prev| prev.item_id == row.item_id))
         });
     OwnLoadout {
         level: limits::within(local.level, limits::LEVEL),
         health: local.health.filter(|n| limits::HEALTH.contains(n)),
         max_health: local.max_health.filter(|n| limits::MAX_HEALTH.contains(n)),
-        souls: stat(local.net_worth),
+        souls: stat(local.souls),
         ability_points: stat(local.ability_points),
         creep_souls: stat(local.creep_souls),
         secured_souls: stat(local.secured_souls),
@@ -326,10 +333,15 @@ fn local_loadout(local: &PlayerRow) -> OwnLoadout {
     }
 }
 
-pub fn collect(s: &LiveSnapshot, local: &PlayerRow) -> Option<MatchDetails> {
-    let local_team = local.team.filter(|team| team.is_playing())?;
+pub fn collect(s: &GameSnapshot, local: &PlayerSample) -> Option<MatchDetails> {
+    let local_team = local.team.filter(|team| *team == Team::Own)?;
+    if !bounded_snapshot(s) || !std::ptr::eq(local_player(s)?, local) || !complete_roster(s, local)
+    {
+        return None;
+    }
     let scoreboard = s
-        .scoreboard()
+        .players
+        .iter()
         .filter(|row| !row.is_spectator)
         .map(|row| scoreboard(row, local_team))
         .collect::<Vec<_>>();
@@ -417,34 +429,56 @@ impl Payload {
     }
 }
 
-fn local_player(s: &LiveSnapshot) -> Option<&PlayerRow> {
-    let mut locals = s.players.iter().filter(|row| row.is_local == Some(true));
-    let player = locals.next()?;
-    (locals.next().is_none() && player.is_playing() && !player.is_spectator).then_some(player)
+// Bound core input before roster traversal; optional groups are bounded
+// independently and become unavailable rather than inventing values.
+fn bounded_snapshot(s: &GameSnapshot) -> bool {
+    s.players.len() <= limits::SCOREBOARD_ROWS
+        && s.local_hero_name
+            .as_ref()
+            .is_none_or(|name| name.len() <= limits::HERO_NAME_BYTES + 16)
 }
 
-fn complete_roster(s: &LiveSnapshot, player: &PlayerRow) -> bool {
+fn local_player(s: &GameSnapshot) -> Option<&PlayerSample> {
+    let mut locals = s.players.iter().filter(|row| row.is_local == Some(true));
+    let player = locals.next()?;
+    (locals.next().is_none() && player.team == Some(Team::Own) && !player.is_spectator)
+        .then_some(player)
+}
+
+fn complete_roster(s: &GameSnapshot, player: &PlayerSample) -> bool {
     let Some(team) = player.team else {
         return false;
     };
     let Some(opponent) = team.opponent() else {
         return false;
     };
+    let mut slots = [[false; limits::SCOREBOARD_ROWS]; 2];
     let mut count = 0;
     let mut own = false;
     let mut enemy = false;
-    for row in s.scoreboard().filter(|row| !row.is_spectator) {
+    for row in s.players.iter().filter(|row| !row.is_spectator) {
         count += 1;
+        if let Some(slot) = row.slot.filter(|slot| limits::SLOTS.contains(slot)) {
+            let side = usize::from(row.team != Some(team));
+            let seen = &mut slots[side][slot as usize - 1];
+            if *seen {
+                return false;
+            }
+            *seen = true;
+        }
         match row.team {
             Some(side) if side == team => own = true,
             Some(side) if side == opponent => enemy = true,
             _ => return false,
         }
     }
-    s.expected_player_count == Some(count) && own && enemy
+    (1..=limits::SCOREBOARD_ROWS as u32).contains(&count)
+        && s.expected_player_count == Some(count)
+        && own
+        && enemy
 }
 
-fn midboss(s: &LiveSnapshot) -> Option<MidbossTelemetry> {
+fn midboss(s: &GameSnapshot) -> Option<MidbossTelemetry> {
     if s.game_mode != Some(GameMode::Normal) {
         return None;
     }
@@ -460,24 +494,31 @@ fn midboss(s: &LiveSnapshot) -> Option<MidbossTelemetry> {
     })
 }
 
-pub fn observation(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Observation> {
+fn production_provenance(provenance: Provenance) -> bool {
+    provenance == Provenance::Authorized
+}
+
+pub fn observation(s: &GameSnapshot) -> Option<Observation> {
+    if !production_provenance(s.provenance)
+        && !(cfg!(test) && s.provenance == Provenance::Synthetic)
+    {
+        return None;
+    }
+    if s.context != MatchContext::LivePlaying
+        || s.eligibility != Eligibility::Eligible
+        || !s.match_token.is_some_and(|token| token > 0)
+    {
+        return None;
+    }
+    if !bounded_snapshot(s) {
+        return None;
+    }
     let player = local_player(s)?;
     if !complete_roster(s, player) {
         return None;
     }
-    let hero_id = player.hero_id.filter(|id| id.0 > 0)?;
-    if !heroes.is_localised(hero_id) {
-        return None;
-    }
-    let hero = limits::hero_name(heroes.hero_name(hero_id)?)?.to_owned();
-    let clock = &s.clock;
-    if !clock.now?.is_finite()
-        || !clock.game_start_time?.is_finite()
-        || !clock.tick_rate.is_finite()
-        || clock.tick_rate <= 0.0
-    {
-        return None;
-    }
+    player.hero_id.filter(|id| *id > 0)?;
+    let hero = limits::hero_name(s.local_hero_name.as_deref()?)?.to_owned();
     let team = player.team?;
     let opponent = team.opponent()?;
     let game_mode = match s.game_mode {
@@ -490,11 +531,11 @@ pub fn observation(s: &LiveSnapshot, heroes: &HeroCatalog) -> Option<Observation
         kills: limits::within(player.kills, limits::SUMMARY_SCORE),
         deaths: limits::within(player.deaths, limits::SUMMARY_SCORE),
         assists: limits::within(player.assists, limits::SUMMARY_SCORE),
-        team_souls: sum_side(s, team, |r| r.net_worth, limits::SOULS),
-        enemy_souls: sum_side(s, opponent, |r| r.net_worth, limits::SOULS),
+        team_souls: sum_side(s, team, |r| r.souls, limits::SOULS),
+        enemy_souls: sum_side(s, opponent, |r| r.souls, limits::SOULS),
         game_mode,
         details: game_mode.and_then(|_| collect(s, player)),
-        game_seconds: limits::clock_seconds(clock.playing_seconds())?,
+        game_seconds: limits::clock_seconds(s.playing_seconds)?,
         paused: s.paused,
         midboss: midboss(s),
     })
@@ -561,7 +602,7 @@ mod tests {
 
     #[test]
     fn only_bridge_buffs_may_carry_an_estimate() {
-        let mut s = LiveSnapshot {
+        let mut s = GameSnapshot {
             game_mode: Some(GameMode::Normal),
             ..Default::default()
         };
@@ -584,13 +625,11 @@ mod tests {
 
     #[test]
     fn a_side_is_own_or_enemy_only_for_the_two_playing_teams() {
-        assert_eq!(Side::of(Some(Team::AMBER), Team::AMBER), Side::Own);
-        assert_eq!(Side::of(Some(Team::SAPPHIRE), Team::AMBER), Side::Enemy);
-        assert_eq!(Side::of(Some(Team::AMBER), Team::SAPPHIRE), Side::Enemy);
-        for other in [Team::UNASSIGNED, Team::SPECTATOR, Team::NEUTRAL, Team(9)] {
-            assert_eq!(Side::of(Some(other), Team::AMBER), Side::Unknown);
-        }
-        assert_eq!(Side::of(None, Team::AMBER), Side::Unknown);
+        assert_eq!(Side::of(Some(Team::Own), Team::Own), Side::Own);
+        assert_eq!(Side::of(Some(Team::Enemy), Team::Own), Side::Enemy);
+        assert_eq!(Side::of(Some(Team::Own), Team::Enemy), Side::Enemy);
+        assert_eq!(Side::of(Some(Team::Unknown), Team::Own), Side::Unknown);
+        assert_eq!(Side::of(None, Team::Own), Side::Unknown);
     }
 
     #[test]
