@@ -18,6 +18,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Require a commit merged into main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - name: Check release version
         run: |
           version=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].version')

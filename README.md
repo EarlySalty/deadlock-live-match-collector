@@ -96,6 +96,15 @@ To verify the GitHub build attestation, use a recent version of the GitHub CLI.
 gh attestation verify .\live-match-collector-VERSION-win64.zip --repo EarlySalty/deadlock-live-match-collector
 ```
 
+## Release and deployment checklist (maintainers)
+
+The collector and the Twitch service are released separately. Before publishing a new collector release, verify that the deployed Twitch service supports `POST /twitch/api/v2/live-match` and the versioned details contract in `src/contract.rs`. The collector's tests use an offline copy of that contract and cannot establish deployment compatibility.
+
+1. Review the service changes against its current `main`, merge and deploy them first. Confirm that an unauthenticated POST to the route returns 401 (not 404).
+2. With a dedicated test channel and a valid connection key, verify a live match upload returns 204, the private dashboard receives the details, and the public overlay receives only the summary. Also verify that an invalidated key returns 401. Never include connection keys in logs or review evidence.
+3. Review and merge the collector after its branch/PR CI succeeds. Verify the packaged Windows executable on a Windows x64 machine, including startup, key entry, match detection, schema drift handling and shutdown.
+4. After these gates pass, tag the merged commit with `v` followed by the version in `Cargo.toml` and push the tag. The release workflow requires the tagged commit to be on `main`, builds and scans the ZIP, attests it and publishes the release. Verify the published checksum and attestation before distributing it.
+
 ## Build from source
 
 Check out the release tag you want to inspect. On Windows x64, use a stable Rust toolchain with the MSVC build tools and run the following commands.
