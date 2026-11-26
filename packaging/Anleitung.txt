@@ -10,7 +10,9 @@ ein autorisierter Testkanal und eine Windows-x64-Test-EXE mit Prüfsumme.
 Prüfe vor dem Start die SHA-256-Prüfsumme der erhaltenen Datei.
 Die interne EXE nutzt ausschließlich https://localhost:8443/twitch/api/v3/live-match.
 Stelle dort einen autorisierten TLS-Testproxy zum isolierten Backend bereit;
-das Zertifikat muss für localhost gültig und vertrauenswürdig sein.
+das Serverzertifikat muss für localhost gültig sein. Lege das vertrauenswürdige
+Test-CA-Zertifikat (PEM, kein privater Schlüssel) als test-ca.pem neben die EXE.
+Nur diese CA wird im internen Build vertraut.
 Keine Produktivweiterleitung und keine Deaktivierung der Zertifikatsprüfung.
 Windows SmartScreen kann vor einer unsignierten App warnen. Meldet ein
 Virenscanner eine konkrete Bedrohung, lass die Datei gesperrt. Deaktiviere

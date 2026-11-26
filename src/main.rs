@@ -493,7 +493,23 @@ fn run() {
     eprintln!("Interner Test: ausschließlich HTTPS über localhost:8443.");
     let builder = client_builder().https_only(true);
     #[cfg(feature = "internal-test")]
-    let builder = builder.no_proxy();
+    let builder = {
+        let certificate = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|dir| dir.join("test-ca.pem")))
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| reqwest::Certificate::from_pem(&bytes).ok())
+            .unwrap_or_else(|| {
+                leave(
+                    "Interner Test: gültige test-ca.pem neben der EXE erforderlich.",
+                    1,
+                )
+            });
+        builder
+            .no_proxy()
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(certificate)
+    };
     let client = match builder.build() {
         Ok(client) => client,
         Err(_) => leave(
