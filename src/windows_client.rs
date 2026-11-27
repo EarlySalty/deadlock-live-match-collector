@@ -7,7 +7,7 @@ use crate::{
         centered, ink_baseline, scale, AUTO_BOUNDS, CAPTION_H, CARDS, CLIENT_H, CLIENT_W,
         EDIT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
     },
-    windows_paint::{Canvas, Session},
+    windows_paint::{Buffer, Canvas, Session},
 };
 use std::{
     cell::RefCell,
@@ -55,6 +55,13 @@ fn wide(s: &str) -> Vec<u16> {
 }
 fn text(hwnd: HWND, s: &str) {
     unsafe {
+        if GetDlgCtrlID(hwnd) as usize != EDIT {
+            let mut old = [0u16; 256];
+            let count = GetWindowTextW(hwnd, old.as_mut_ptr(), old.len() as i32).max(0) as usize;
+            if old[..count].iter().copied().eq(s.encode_utf16()) {
+                return;
+            }
+        }
         SetWindowTextW(hwnd, wide(s).as_ptr());
         InvalidateRect(hwnd, null(), 0);
     }
@@ -358,12 +365,12 @@ const BG: u32 = 0x141211;
 const CARD: u32 = 0x211f1d;
 const GOLD: u32 = 0x5ea1c7;
 const FG: u32 = 0xece9e5;
-const MUTED: u32 = 0xbcb6ad;
+const MUTED: u32 = 0xc8c3bb;
 const GREEN: u32 = 0xa9ce78;
 const RED: u32 = 0x8b8bf0;
 const FIELD: u32 = 0x171514;
 const LINE: u32 = 0x3d3732;
-const TILE: u32 = 0x352b22;
+const TILE: u32 = 0x2b2927;
 const TITLE_LABEL: usize = 210;
 const MINIMIZE: usize = 211;
 const CLOSE_WINDOW: usize = 212;
@@ -383,21 +390,11 @@ type LayoutItem = (HWND, (i32, i32, i32, i32), usize);
 thread_local! {
     static LAYOUT: RefCell<Vec<LayoutItem>> = const { RefCell::new(Vec::new()) };
     static HOVER: RefCell<Vec<(HWND,u8)>> = const { RefCell::new(Vec::new()) };
-    static HOVER_TIMER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FONTS: RefCell<Vec<(usize,u32,HFONT)>> = const { RefCell::new(Vec::new()) };
 }
 fn font(id: usize, dpi: u32) -> HFONT {
-    let kind = if id == HEADING {
-        1
-    } else if id == BACKEND || id == GAME {
-        2
-    } else if id == SECTION || id == SAVE {
-        3
-    } else if id == BRAND || id == CARD_LABEL || id == SUBTLE || id == FOOT {
-        4
-    } else {
-        0
-    };
+    let (size, weight, _) = text_style(id);
+    let kind = size as usize * 1000 + weight as usize;
     FONTS.with(|fonts| {
         let mut fonts = fonts.borrow_mut();
         if let Some((_, _, h)) = fonts.iter().find(|(k, d, _)| *k == kind && *d == dpi) {
@@ -405,22 +402,18 @@ fn font(id: usize, dpi: u32) -> HFONT {
         }
         let h = unsafe {
             CreateFontW(
-                -scale([15, 26, 19, 16, 13][kind], dpi),
+                -scale(size, dpi),
                 0,
                 0,
                 0,
-                if kind == 0 || kind == 4 {
-                    FW_NORMAL as i32
-                } else {
-                    FW_SEMIBOLD as i32
-                },
+                weight,
                 0,
                 0,
                 0,
                 DEFAULT_CHARSET as u32,
                 OUT_DEFAULT_PRECIS as u32,
                 CLIP_DEFAULT_PRECIS as u32,
-                ANTIALIASED_QUALITY as u32,
+                CLEARTYPE_QUALITY as u32,
                 DEFAULT_PITCH as u32,
                 wide("Segoe UI").as_ptr(),
             )
@@ -547,12 +540,26 @@ fn hover_level(hwnd: HWND) -> u8 {
             .map_or(0, |(_, v)| *v)
     })
 }
-unsafe fn start_hover_timer(hwnd: HWND) {
-    HOVER_TIMER.with(|running| {
-        if !running.get() && SetTimer(hwnd, 2, 35, None) != 0 {
-            running.set(true);
+unsafe fn set_hover(child: HWND, value: u8) {
+    let changed = HOVER.with(|h| {
+        let mut h = h.borrow_mut();
+        if let Some((_, v)) = h.iter_mut().find(|(w, _)| *w == child) {
+            if *v != value {
+                *v = value;
+                return true;
+            }
         }
+        false
     });
+    if changed {
+        InvalidateRect(child, null(), 0);
+    }
+}
+unsafe fn clear_hover() {
+    let children = HOVER.with(|h| h.borrow().iter().map(|(w, _)| *w).collect::<Vec<_>>());
+    for child in children {
+        set_hover(child, 0);
+    }
 }
 unsafe extern "system" fn hover_subclass(
     child: HWND,
@@ -562,65 +569,37 @@ unsafe extern "system" fn hover_subclass(
     id: usize,
     _data: usize,
 ) -> LRESULT {
-    if msg == WM_MOUSEMOVE || msg == WM_MOUSELEAVE {
-        if msg == WM_MOUSEMOVE {
+    match msg {
+        WM_MOUSEMOVE if hover_level(child) == 0 => {
             let mut track = TRACKMOUSEEVENT {
                 cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE,
                 hwndTrack: child,
                 dwHoverTime: 0,
             };
-            TrackMouseEvent(&mut track);
+            if TrackMouseEvent(&mut track) != 0 {
+                set_hover(child, 4);
+            }
         }
-        let parent = GetParent(child);
-        if !parent.is_null() {
-            start_hover_timer(parent);
+        WM_MOUSELEAVE => set_hover(child, 0),
+        WM_ERASEBKGND => return 1,
+        WM_NCDESTROY => {
+            HOVER.with(|h| h.borrow_mut().retain(|(w, _)| *w != child));
+            RemoveWindowSubclass(child, Some(hover_subclass), id);
         }
-    } else if msg == WM_NCDESTROY {
-        RemoveWindowSubclass(child, Some(hover_subclass), id);
+        _ => {}
     }
     DefSubclassProc(child, msg, w, l)
 }
-unsafe fn animate_hover(hwnd: HWND) {
-    let mut pt: POINT = zeroed();
-    let over = if IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 && GetCursorPos(&mut pt) != 0 {
-        WindowFromPoint(pt)
-    } else {
-        null_mut()
-    };
-    let changes = HOVER.with(|h| {
-        let mut h = h.borrow_mut();
-        let mut changed = Vec::new();
-        for (child, step) in h.iter_mut() {
-            let next = if *child == over {
-                (*step + 1).min(4)
-            } else {
-                step.saturating_sub(1)
-            };
-            if next != *step {
-                *step = next;
-                changed.push(*child);
-            }
-        }
-        changed
-    });
-    if changes.is_empty() {
-        KillTimer(hwnd, 2);
-        HOVER_TIMER.with(|running| running.set(false));
-    }
-    for child in changes {
-        InvalidateRect(child, null(), 0);
-    }
-}
-fn text_style(id: usize) -> (i32, bool, bool) {
+fn text_style(id: usize) -> (i32, i32, bool) {
     match id {
-        HEADING => (30, true, false),
-        BACKEND | GAME => (19, true, true),
-        SECTION | AUTO_LABEL => (16, true, false),
-        BRAND | TITLE_LABEL | FOOT | CARD_LABEL | AUTO_HINT => (13, false, false),
-        SUBTLE => (13, false, true),
-        SAVE => (15, true, false),
-        _ => (14, false, false),
+        HEADING => (30, FW_SEMIBOLD as i32, false),
+        BACKEND | GAME => (19, FW_SEMIBOLD as i32, true),
+        SECTION | AUTO_LABEL => (16, FW_SEMIBOLD as i32, false),
+        SAVE => (15, FW_SEMIBOLD as i32, false),
+        BRAND | TITLE_LABEL | FOOT | CARD_LABEL | AUTO_HINT => (14, FW_NORMAL as i32, false),
+        SUBTLE => (14, FW_NORMAL as i32, true),
+        _ => (15, FW_NORMAL as i32, false),
     }
 }
 fn label_color(id: usize) -> u32 {
@@ -644,21 +623,23 @@ unsafe fn paint_label(
     fg: u32,
     center: bool,
 ) {
-    let (size, bold, wrap) = text_style(id);
-    if let Some(canvas) = Canvas::new(dc) {
-        if canvas.text(label, r, fg, scale(size, dpi), (bold, center, wrap)) {
-            return;
-        }
-    }
+    let (_, _, wrap) = text_style(id);
     let old = SelectObject(dc, font(id, dpi));
     SetBkMode(dc, TRANSPARENT as i32);
     SetTextColor(dc, fg);
     let flags = if center {
         center_button_label(dc, label, &mut r)
     } else if wrap {
-        DT_WORDBREAK | DT_NOPREFIX
+        let mut extent: SIZE = zeroed();
+        if GetTextExtentPoint32W(dc, label.as_ptr(), label.len() as i32, &mut extent) != 0
+            && extent.cx <= r.right - r.left
+        {
+            center_button_label(dc, label, &mut r) & !DT_CENTER
+        } else {
+            DT_WORDBREAK | DT_NOPREFIX
+        }
     } else {
-        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS
+        center_button_label(dc, label, &mut r) & !DT_CENTER
     };
     DrawTextW(dc, label.as_ptr(), label.len() as i32, &mut r, flags);
     SelectObject(dc, old);
@@ -739,21 +720,21 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
             diameter,
         );
         if !on && !off {
-            if let Some(canvas) = Canvas::new(item.hDC) {
-                let q = wide("?");
-                canvas.text(
-                    &q[..1],
-                    RECT {
-                        left: x,
-                        top: t,
-                        right: x + diameter,
-                        bottom: b,
-                    },
-                    BG,
-                    sc(13),
-                    (true, true, false),
-                );
-            }
+            let q = wide("?");
+            paint_label(
+                item.hDC,
+                id,
+                dpi,
+                &q[..1],
+                RECT {
+                    left: x,
+                    top: t,
+                    right: x + diameter,
+                    bottom: b,
+                },
+                BG,
+                true,
+            );
         }
     } else {
         let base = if id == SAVE {
@@ -764,7 +745,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
             bg
         };
         let hot = if id == SAVE {
-            0x7db8e1
+            0x6aafd5
         } else if id == CLOSE_WINDOW {
             0x494078
         } else {
@@ -776,23 +757,37 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
             SAVE => "link",
             DASH => "external",
             FORGET => "trash",
-            REPO => "code",
+            REPO => "repo",
             EXIT => "power",
             MINIMIZE => "minus",
             CLOSE_WINDOW => "close",
             _ => "",
         };
-        let icon_size = sc(if matches!(id, MINIMIZE | CLOSE_WINDOW) {
-            18
-        } else {
-            16
-        });
+        let icon_size = sc(18);
         let (top, bottom) = centered(r.top, r.bottom, icon_size);
         let icon_only = matches!(id, MINIMIZE | CLOSE_WINDOW);
-        let left = if icon_only {
-            centered(r.left, r.right, icon_size).0
+        let (left, text_rect) = if icon_only {
+            (centered(r.left, r.right, icon_size).0, r)
         } else {
-            r.left + sc(12)
+            let old = SelectObject(item.hDC, font(id, dpi));
+            let mut measured: SIZE = zeroed();
+            GetTextExtentPoint32W(item.hDC, label.as_ptr(), n as i32, &mut measured);
+            SelectObject(item.hDC, old);
+            let (icon_left, text_left, text_right) = crate::window_layout::icon_label_group(
+                r.left + sc(8),
+                r.right - sc(8),
+                icon_size,
+                sc(8),
+                measured.cx + sc(2),
+            );
+            (
+                icon_left,
+                RECT {
+                    left: text_left,
+                    right: text_right,
+                    ..r
+                },
+            )
         };
         if let Some(canvas) = Canvas::new(item.hDC) {
             canvas.icon(
@@ -810,12 +805,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
             paint_label(item.hDC, id, dpi, &glyph[..1], r, fg, true);
         }
         if !icon_only {
-            let text_rect = RECT {
-                left: r.left + sc(31),
-                right: r.right - sc(7),
-                ..r
-            };
-            paint_label(item.hDC, id, dpi, &label[..n], text_rect, fg, true);
+            paint_label(item.hDC, id, dpi, &label[..n], text_rect, fg, false);
         }
     }
     if item.itemState & 0x10 != 0 {
@@ -1032,16 +1022,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_ERASEBKGND => 1,
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
-            let dc = BeginPaint(hwnd, &mut ps);
+            let target = BeginPaint(hwnd, &mut ps);
             let dpi = GetDpiForWindow(hwnd).max(96);
             let mut r: RECT = zeroed();
             GetClientRect(hwnd, &mut r);
+            let buffer = Buffer::new(target, r);
+            let dc = buffer.as_ref().map_or(target, Buffer::dc);
             fill(dc, r, BG);
             for bounds in CARDS {
                 rounded(dc, scaled_rect(bounds, dpi), CARD, scale(28, dpi));
             }
             fill(dc, scaled_rect((24, 36, 584, 1), dpi), LINE);
-            let title = wide("DDC  /  LIVE COLLECTOR");
+            let title = wide("Deadlock Live Collector");
             paint_label(
                 dc,
                 TITLE_LABEL,
@@ -1101,6 +1093,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 );
                 DestroyIcon(icon as HICON);
             }
+            if let Some(b) = buffer {
+                b.present(target, r);
+            }
             EndPaint(hwnd, &ps);
             0
         }
@@ -1121,10 +1116,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         WM_DRAWITEM if l != 0 => {
             let item = &*(l as *const DRAWITEMSTRUCT);
+            let buffer = Buffer::new(item.hDC, item.rcItem);
+            let mut painted = *item;
+            if let Some(b) = &buffer {
+                painted.hDC = b.dc();
+            }
             if item.CtlType == ODT_STATIC {
-                draw_static(item);
+                draw_static(&painted);
             } else {
-                draw_button(item);
+                draw_button(&painted);
+            }
+            if let Some(b) = buffer {
+                b.present(item.hDC, item.rcItem);
             }
             1
         }
@@ -1184,16 +1187,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             0
         }
         WM_SHOWWINDOW if w == 0 => {
-            start_hover_timer(hwnd);
+            clear_hover();
             DefWindowProcW(hwnd, msg, w, l)
         }
         WM_SIZE if w == SIZE_MINIMIZED as usize => {
-            start_hover_timer(hwnd);
+            clear_hover();
             DefWindowProcW(hwnd, msg, w, l)
-        }
-        WM_TIMER if w == 2 => {
-            animate_hover(hwnd);
-            0
         }
         WM_TIMER => {
             UI.with(|cell| {
@@ -1453,8 +1452,8 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     let brand = label("DEUTSCHE DEADLOCK COMMUNITY", BRAND, (94, 93, 498, 21));
     let backend_label = label("Backend", CARD_LABEL, (80, 150, 190, 24));
     let game_label = label("Deadlock", CARD_LABEL, (378, 150, 190, 24));
-    let status = label("Verbindung wird hergestellt …", BACKEND, (40, 184, 254, 57));
-    let game = label("Spielstatus wird geprüft …", GAME, (338, 184, 254, 57));
+    let status = label("Verbindung wird hergestellt …", BACKEND, (40, 184, 254, 46));
+    let game = label("Spielstatus wird geprüft …", GAME, (338, 184, 254, 46));
     let connection = label("Verbindung", SECTION, (80, 278, 512, 32));
     let saved = label("Schlüssel wird geprüft …", SUBTLE, (40, 310, 552, 20));
     let edit = control(
@@ -1466,13 +1465,13 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         EDIT_BOUNDS,
     );
     SendMessageW(edit, EM_SETLIMITTEXT, 128, 0);
-    let save = button("Verbinden", SAVE, (40, 382, 268, 38));
-    let dashboard = button("Dashboard öffnen", DASH, (320, 382, 272, 38));
-    let forget = button("Schlüssel entfernen", FORGET, (40, 428, 170, 32));
-    let notice = label("", SUBTLE, (218, 428, 374, 38));
+    let save = button("Verbinden", SAVE, (40, 382, 270, 38));
+    let dashboard = button("Dashboard öffnen", DASH, (322, 382, 270, 38));
+    let forget = button("Schlüssel entfernen", FORGET, (40, 430, 186, 32));
+    let notice = label("", SUBTLE, (238, 430, 354, 32));
     let auto_label = label("Mit Windows starten", AUTO_LABEL, (80, 503, 420, 25));
     let auto_hint = label(
-        "Beim Anmelden starten · X blendet ins Tray aus",
+        "Beim Anmelden im Hintergrund starten",
         AUTO_HINT,
         (80, 528, 420, 21),
     );
@@ -1480,10 +1479,10 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     let version = label(
         concat!("Version ", env!("CARGO_PKG_VERSION"), " · Windows x64"),
         FOOT,
-        (24, 597, 260, 26),
+        (24, 595, 266, 30),
     );
-    let repo = button("GitHub", REPO, (322, 595, 104, 29));
-    let exit = button("Beenden", EXIT, (446, 595, 162, 29));
+    let repo = button("GitHub", REPO, (366, 595, 110, 30));
+    let exit = button("Beenden", EXIT, (488, 595, 120, 30));
     if [
         minimize,
         close,
@@ -1518,7 +1517,7 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
             Some(key),
             "Schlüssel geschützt gespeichert. Schließen minimiert in den Infobereich.",
         ),
-        Ok(None) => (None, "Bitte Schlüssel eingeben. Autostart ist optional."),
+        Ok(None) => (None, "Bitte Verbindungsschlüssel eingeben."),
         Err(()) => (
             None,
             "Gespeicherter Schlüssel nicht lesbar. Bitte erneut eingeben.",
@@ -1604,7 +1603,6 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         }
     }
     KillTimer(hwnd, 1);
-    KillTimer(hwnd, 2);
     HOVER.with(|h| h.borrow_mut().clear());
     UI.with(|cell| {
         if let Some(ui) = cell.borrow_mut().take() {

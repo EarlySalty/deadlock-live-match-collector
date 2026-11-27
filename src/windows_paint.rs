@@ -2,7 +2,7 @@
 use std::ptr::null_mut;
 use windows_sys::Win32::{
     Foundation::RECT,
-    Graphics::{Gdi::HDC, GdiPlus::*},
+    Graphics::{Gdi::*, GdiPlus::*},
 };
 
 pub(super) struct Session(usize);
@@ -39,7 +39,6 @@ impl Canvas {
         }
         GdipSetSmoothingMode(g, SmoothingModeAntiAlias8x8);
         GdipSetPixelOffsetMode(g, PixelOffsetModeHalf);
-        GdipSetTextRenderingHint(g, TextRenderingHintAntiAliasGridFit);
         Some(Self(g))
     }
 
@@ -90,7 +89,7 @@ impl Canvas {
         let y = r.top as f32;
         unsafe {
             let mut pen = null_mut();
-            if GdipCreatePen1(argb(color), 1.65 * s, UnitPixel, &mut pen) != 0 {
+            if GdipCreatePen1(argb(color), 2.1 * s, UnitPixel, &mut pen) != 0 {
                 return;
             }
             GdipSetPenStartCap(pen, LineCapRound);
@@ -106,213 +105,171 @@ impl Canvas {
                     .collect();
                 GdipDrawLines(self.0, pen, pts.as_ptr(), pts.len() as i32);
             };
-            let rect = |a: f32, b: f32, c: f32, d: f32| {
-                GdipDrawRectangle(self.0, pen, x + a * s, y + b * s, c * s, d * s);
+            let curve = |points: &[(f32, f32)]| {
+                let pts: Vec<PointF> = points
+                    .iter()
+                    .map(|&(a, b)| PointF {
+                        X: x + a * s,
+                        Y: y + b * s,
+                    })
+                    .collect();
+                GdipDrawBeziers(self.0, pen, pts.as_ptr(), pts.len() as i32);
             };
             let circle = |a: f32, b: f32, d: f32| {
                 GdipDrawEllipse(self.0, pen, x + a * s, y + b * s, d * s, d * s);
             };
+            let box_outline = |a: f32, b: f32, c: f32, d: f32| {
+                let mut path = null_mut();
+                if GdipCreatePath(FillModeWinding, &mut path) == 0 {
+                    let radius = 3.0 * s;
+                    let (xx, yy, ww, hh) = (x + a * s, y + b * s, c * s, d * s);
+                    for (px, py, angle) in [
+                        (xx, yy, 180.),
+                        (xx + ww - radius, yy, 270.),
+                        (xx + ww - radius, yy + hh - radius, 0.),
+                        (xx, yy + hh - radius, 90.),
+                    ] {
+                        GdipAddPathArc(path, px, py, radius, radius, angle, 90.);
+                    }
+                    GdipClosePathFigure(path);
+                    GdipDrawPath(self.0, pen, path);
+                    GdipDeletePath(path);
+                }
+            };
             match name {
                 "server" => {
-                    rect(3., 4., 18., 6.);
-                    rect(3., 14., 18., 6.);
-                    lines(&[(6., 7.), (8., 7.)]);
-                    lines(&[(6., 17.), (8., 17.)]);
+                    box_outline(3., 3., 18., 7.);
+                    box_outline(3., 14., 18., 7.);
+                    lines(&[(6.5, 6.5), (8., 6.5)]);
+                    lines(&[(6.5, 17.5), (8., 17.5)]);
+                    lines(&[(17., 6.5), (18., 6.5)]);
+                    lines(&[(17., 17.5), (18., 17.5)]);
                 }
                 "game" => {
-                    lines(&[
+                    curve(&[
                         (7., 6.),
+                        (4., 6.),
+                        (3., 9.),
+                        (2.8, 14.),
+                        (2., 18.),
+                        (4.5, 20.),
+                        (7., 17.),
+                        (9., 14.),
+                        (15., 14.),
+                        (17., 17.),
+                        (19.5, 20.),
+                        (22., 18.),
+                        (21.2, 14.),
+                        (21., 9.),
+                        (20., 6.),
                         (17., 6.),
-                        (20., 9.),
-                        (22., 17.),
-                        (19., 19.),
-                        (15., 15.),
-                        (9., 15.),
-                        (5., 19.),
-                        (2., 17.),
-                        (4., 9.),
+                        (14., 6.),
+                        (10., 6.),
                         (7., 6.),
                     ]);
-                    lines(&[(6., 10.), (12., 10.)]);
-                    lines(&[(9., 7.5), (9., 12.5)]);
-                    circle(16., 9., 1.5);
-                    circle(18.5, 11.5, 1.5);
+                    lines(&[(6., 10.), (11., 10.)]);
+                    lines(&[(8.5, 7.5), (8.5, 12.5)]);
+                    circle(15., 8., 1.8);
+                    circle(18., 11., 1.8);
                 }
                 "shield" => {
-                    lines(&[
-                        (12., 2.),
-                        (20., 5.),
-                        (20., 12.),
-                        (17., 18.),
-                        (12., 22.),
-                        (7., 18.),
-                        (4., 12.),
-                        (4., 5.),
-                        (12., 2.),
+                    curve(&[
+                        (12., 3.),
+                        (15., 4.5),
+                        (18., 5.),
+                        (20., 5.5),
+                        (20., 13.),
+                        (18., 18.),
+                        (12., 21.),
+                        (6., 18.),
+                        (4., 13.),
+                        (4., 5.5),
+                        (6., 5.),
+                        (9., 4.5),
+                        (12., 3.),
                     ]);
-                    lines(&[(8., 12.), (11., 15.), (16., 9.)]);
+                    lines(&[(8.5, 12.), (11., 14.5), (15.5, 10.)]);
                 }
                 "key" => {
                     circle(3., 3., 10.);
                     lines(&[
-                        (11., 11.),
-                        (21., 21.),
-                        (18., 21.),
-                        (18., 18.),
-                        (15., 18.),
-                        (15., 15.),
+                        (11.5, 11.5),
+                        (20.5, 20.5),
+                        (20.5, 16.5),
+                        (17.5, 16.5),
+                        (17.5, 13.5),
                     ]);
                 }
                 "link" => {
-                    lines(&[
+                    curve(&[
                         (10., 14.),
-                        (7., 17.),
-                        (4., 17.),
-                        (2., 14.),
+                        (8., 16.),
+                        (5., 17.),
+                        (3.5, 15.5),
+                        (1.5, 13.5),
                         (2., 11.),
-                        (7., 6.),
-                        (10., 6.),
-                        (12., 8.),
+                        (4., 9.),
+                        (6., 7.),
+                        (9., 6.),
+                        (11., 8.),
                     ]);
-                    lines(&[
-                        (12., 16.),
-                        (14., 18.),
-                        (17., 18.),
-                        (22., 13.),
-                        (22., 10.),
+                    curve(&[
+                        (14., 10.),
+                        (16., 8.),
                         (19., 7.),
-                        (16., 7.),
-                        (13., 10.),
+                        (20.5, 8.5),
+                        (22.5, 10.5),
+                        (22., 13.),
+                        (20., 15.),
+                        (18., 17.),
+                        (15., 18.),
+                        (13., 16.),
                     ]);
-                    lines(&[(8., 16.), (16., 8.)]);
+                    lines(&[(8.5, 15.5), (15.5, 8.5)]);
                 }
                 "external" => {
-                    lines(&[(13., 3.), (21., 3.), (21., 11.)]);
-                    lines(&[(21., 3.), (10., 14.)]);
-                    lines(&[(10., 5.), (4., 5.), (4., 20.), (19., 20.), (19., 14.)]);
+                    lines(&[(13., 3.5), (20.5, 3.5), (20.5, 11.)]);
+                    lines(&[(20.5, 3.5), (10., 14.)]);
+                    lines(&[(10., 5.5), (5., 5.5), (5., 19.5), (18.5, 19.5), (18.5, 14.)]);
                 }
                 "power" => {
                     GdipDrawArc(
                         self.0,
                         pen,
-                        x + 3. * s,
-                        y + 4. * s,
-                        18. * s,
-                        18. * s,
-                        -55.,
-                        290.,
+                        x + 3.5 * s,
+                        y + 4.5 * s,
+                        17. * s,
+                        17. * s,
+                        -49.,
+                        278.,
                     );
-                    lines(&[(12., 2.), (12., 12.)]);
+                    lines(&[(12., 3.), (12., 11.5)]);
                 }
                 "minus" => {
-                    lines(&[(5., 12.), (19., 12.)]);
+                    lines(&[(6., 12.), (18., 12.)]);
                 }
                 "close" => {
-                    lines(&[(6., 6.), (18., 18.)]);
-                    lines(&[(18., 6.), (6., 18.)]);
+                    lines(&[(6.5, 6.5), (17.5, 17.5)]);
+                    lines(&[(17.5, 6.5), (6.5, 17.5)]);
                 }
-                "code" => {
-                    lines(&[(8., 6.), (2., 12.), (8., 18.)]);
-                    lines(&[(16., 6.), (22., 12.), (16., 18.)]);
-                    lines(&[(14., 4.), (10., 20.)]);
+                "repo" => {
+                    // Repository/branch symbol, not a misleading generic code bracket.
+                    circle(4., 3., 5.);
+                    circle(4., 16., 5.);
+                    circle(15., 3., 5.);
+                    lines(&[(6.5, 8.), (6.5, 16.)]);
+                    curve(&[(17.5, 8.), (17.5, 12.), (13., 13.), (6.5, 13.)]);
                 }
                 "trash" => {
-                    lines(&[(4., 6.), (20., 6.)]);
-                    lines(&[(9., 6.), (9., 3.), (15., 3.), (15., 6.)]);
-                    lines(&[(6., 6.), (7., 21.), (17., 21.), (18., 6.)]);
-                    lines(&[(10., 10.), (10., 17.)]);
-                    lines(&[(14., 10.), (14., 17.)]);
+                    lines(&[(4., 6.5), (20., 6.5)]);
+                    lines(&[(9., 6.5), (9., 3.5), (15., 3.5), (15., 6.5)]);
+                    lines(&[(6., 6.5), (7., 20.5), (17., 20.5), (18., 6.5)]);
+                    lines(&[(10., 10.), (10., 16.5)]);
+                    lines(&[(14., 10.), (14., 16.5)]);
                 }
                 _ => {}
             }
             GdipDeletePen(pen);
-        }
-    }
-
-    pub(super) fn text(
-        &self,
-        label: &[u16],
-        r: RECT,
-        color: u32,
-        size: i32,
-        style: (bool, bool, bool),
-    ) -> bool {
-        let (bold, center, wrap) = style;
-        let name: Vec<u16> = "Segoe UI".encode_utf16().chain(Some(0)).collect();
-        unsafe {
-            let mut family = null_mut();
-            if GdipCreateFontFamilyFromName(name.as_ptr(), null_mut(), &mut family) != 0 {
-                return false;
-            }
-            let mut font = null_mut();
-            let status = GdipCreateFont(
-                family,
-                size as f32,
-                if bold {
-                    FontStyleBold
-                } else {
-                    FontStyleRegular
-                },
-                UnitPixel,
-                &mut font,
-            );
-            GdipDeleteFontFamily(family);
-            if status != 0 {
-                return false;
-            }
-            let mut format = null_mut();
-            let mut brush = null_mut();
-            let ok = if GdipCreateStringFormat(
-                if wrap { 0 } else { StringFormatFlagsNoWrap },
-                0,
-                &mut format,
-            ) == 0
-            {
-                GdipSetStringFormatAlign(
-                    format,
-                    if center {
-                        StringAlignmentCenter
-                    } else {
-                        StringAlignmentNear
-                    },
-                );
-                GdipSetStringFormatLineAlign(
-                    format,
-                    if wrap {
-                        StringAlignmentNear
-                    } else {
-                        StringAlignmentCenter
-                    },
-                );
-                GdipSetStringFormatTrimming(format, StringTrimmingEllipsisCharacter);
-                let ok = if GdipCreateSolidFill(argb(color), &mut brush) == 0 {
-                    let rect = RectF {
-                        X: r.left as f32,
-                        Y: r.top as f32,
-                        Width: (r.right - r.left) as f32,
-                        Height: (r.bottom - r.top) as f32,
-                    };
-                    let ok = GdipDrawString(
-                        self.0,
-                        label.as_ptr(),
-                        label.len() as i32,
-                        font,
-                        &rect,
-                        format,
-                        brush.cast(),
-                    ) == 0;
-                    GdipDeleteBrush(brush.cast());
-                    ok
-                } else {
-                    false
-                };
-                GdipDeleteStringFormat(format);
-                ok
-            } else {
-                false
-            };
-            GdipDeleteFont(font);
-            ok
         }
     }
 }
@@ -320,6 +277,62 @@ impl Drop for Canvas {
     fn drop(&mut self) {
         unsafe {
             GdipDeleteGraphics(self.0);
+        }
+    }
+}
+
+// Render every opaque owner-drawn control into a device-compatible bitmap,
+// then present it with one blit. GDI text stays on native device pixels.
+pub(super) struct Buffer {
+    dc: HDC,
+    bitmap: HBITMAP,
+    old: HGDIOBJ,
+}
+impl Buffer {
+    pub(super) unsafe fn new(target: HDC, r: RECT) -> Option<Self> {
+        if r.right <= 0 || r.bottom <= 0 {
+            return None;
+        }
+        let dc = CreateCompatibleDC(target);
+        if dc.is_null() {
+            return None;
+        }
+        let bitmap = CreateCompatibleBitmap(target, r.right, r.bottom);
+        if bitmap.is_null() {
+            DeleteDC(dc);
+            return None;
+        }
+        let old = SelectObject(dc, bitmap);
+        if old.is_null() || old as isize == -1 {
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            return None;
+        }
+        Some(Self { dc, bitmap, old })
+    }
+    pub(super) fn dc(&self) -> HDC {
+        self.dc
+    }
+    pub(super) unsafe fn present(&self, target: HDC, r: RECT) {
+        BitBlt(
+            target,
+            r.left,
+            r.top,
+            r.right - r.left,
+            r.bottom - r.top,
+            self.dc,
+            r.left,
+            r.top,
+            SRCCOPY,
+        );
+    }
+}
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.old);
+            DeleteObject(self.bitmap);
+            DeleteDC(self.dc);
         }
     }
 }

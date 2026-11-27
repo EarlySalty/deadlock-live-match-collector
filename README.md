@@ -70,3 +70,7 @@ Version 0.2.3: gezielte optische Feinausrichtung. Schalter, Knopf und sichtbare 
 ### Nachtgold-Oberfläche 0.2.5
 
 Eigene native Titelleiste, GDI+-geglättete Karten, Schrift und Linienicons; reduzierte Statuskarten, ein eigener Autostart-Schalter und ereignisgesteuerte Hover-Übergänge. Die Windows-Standard-EDIT-Schlüsselmaske, die geordnete Update-Übernahme, Tray-Funktionen und geschützte Schlüsselablage bleiben unverändert. Das Community-Logo bleibt die Originalressource. Fenster-X blendet wie bisher in den Infobereich aus, Minimieren minimiert, Beenden stoppt den Collector.
+
+### UI-Korrektur 0.2.6
+
+Native GDI/ClearType-Schrift statt GDI+-Schriftrasterung; GDI+ zeichnet nur Formen und Icons. Gezeichnete Karten und Bedienelemente werden gepuffert und jeweils mit einem BitBlt präsentiert. Hover reagiert nur auf Eintritt/Austritt, ohne Animationstimer. Einheitliche Linienicons und gemessene gemeinsame Icon-Text-Gruppen; Titelleiste ohne DDC-Kürzel, Fußzeile im bisherigen Stil. Keine Änderung am Installer oder Backend.

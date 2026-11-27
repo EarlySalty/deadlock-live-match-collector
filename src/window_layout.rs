@@ -29,9 +29,38 @@ pub(crate) fn ink_baseline(top: i32, bottom: i32, above: i32, below: i32) -> i32
     centered(top, bottom, above + below).0 + above
 }
 
+/// Align the icon and its measured label as a single centered unit.
+pub(crate) fn icon_label_group(
+    left: i32,
+    right: i32,
+    icon: i32,
+    gap: i32,
+    text: i32,
+) -> (i32, i32, i32) {
+    let text = text.max(0).min((right - left - icon - gap).max(0));
+    let (start, end) = centered(left, right, icon + gap + text);
+    (start, start + icon + gap, end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_and_label_are_centered_as_one_group_without_overflow() {
+        for dpi in [96, 120, 144, 168, 192, 240, 288] {
+            for (w, text) in [(110, 45), (120, 48), (270, 100), (186, 134), (110, 200)] {
+                let l = scale(8, dpi);
+                let r = scale(w, dpi) - l;
+                let i = scale(16, dpi);
+                let gap = scale(8, dpi);
+                let (a, b, c) = icon_label_group(l, r, i, gap, scale(text, dpi));
+                assert!(a >= l && c <= r);
+                assert_eq!(b - a, i + gap);
+                assert!((a + c - l - r).abs() <= 1);
+            }
+        }
+    }
 
     #[test]
     fn toggle_track_thumb_and_label_share_the_button_center_at_common_dpis() {
@@ -82,16 +111,16 @@ mod tests {
             for (card, control) in [
                 (CARDS[2], EDIT_BOUNDS),
                 (CARDS[3], AUTO_BOUNDS),
-                (CARDS[0], (40, 184, 254, 57)),
-                (CARDS[1], (338, 184, 254, 57)),
-                (CARDS[2], (40, 382, 268, 38)),
-                (CARDS[2], (320, 382, 272, 38)),
-                (CARDS[2], (218, 428, 374, 38)),
+                (CARDS[0], (40, 184, 254, 46)),
+                (CARDS[1], (338, 184, 254, 46)),
+                (CARDS[2], (40, 382, 270, 38)),
+                (CARDS[2], (322, 382, 270, 38)),
+                (CARDS[2], (238, 430, 354, 32)),
             ] {
                 assert!(contains(card, control));
             }
             assert!(contains((0, 0, CLIENT_W, CAPTION_H), (588, 3, 40, 30)));
-            assert!(contains((0, 0, CLIENT_W, CLIENT_H), (446, 595, 162, 29)));
+            assert!(contains((0, 0, CLIENT_W, CLIENT_H), (488, 595, 120, 30)));
         }
     }
 
