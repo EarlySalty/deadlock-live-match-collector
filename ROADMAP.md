@@ -1,6 +1,8 @@
 # Development roadmap
 
-## Independent development (current, blocked runtime)
+## Desktop preview v0.3.0 (published, live runtime blocked)
+
+The [public desktop preview](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0) is available for isolated evaluation. Its release workflow and exact-file security gates passed. Live match collection and production deployment remain blocked.
 
 - Collector-owned game model, source trait and API v3/schema 3 contract; no Deadlock Plus dependency.
 - CLI exits before key input or network when a complete authorized source is unavailable.
@@ -11,7 +13,7 @@
 
 1. Establish permission and a complete visible-field matrix for a real independent source. Implement and test freshness, identity, field visibility and input bounds without fake values or hidden enemy information.
 2. Test the adapter, Windows console/TLS/transport, real match transitions and actual backend/bot consumer in an isolated authorized environment; verify retention, replay, rotation and access boundaries.
-3. Independently reproduce the build with documented/pinned native toolchain inputs; obtain actual AV evidence, resolve historical findings, approve signing/provenance and private digest-bound handoff. No scanner bypass or external submission without exact-hash permission.
-4. Owner approves protected publisher, release rights, privacy and deployment separately. No public binary, tag or release while unconditional source/publisher gates remain.
+3. Independently reproduce the build with documented/pinned native toolchain inputs; retain actual AV evidence and investigate historical findings. Evaluate legitimate signing. Keep the existing GitHub-hosted release gates and exact-file submission scope; no scanner bypass.
+4. Obtain explicit production approval for source permission, distribution rights, privacy, backend deployment and stable release. The v0.3.0 desktop-preview exception is not production authorization.
 
 No date or guarantee of an authorized source is asserted.
