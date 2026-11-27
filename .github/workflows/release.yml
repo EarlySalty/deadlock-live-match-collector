@@ -1,28 +1,11 @@
 name: Build and publish Windows release
 
 on:
+  workflow_run:
+    workflows: ["Check Windows build"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing version tag on this main commit
-        required: true
-        type: string
-      prerelease:
-        description: Mark as prerelease (backend need not be active yet)
-        type: boolean
-        default: true
-      publish:
-        description: Publish after all checks, rather than leaving a draft
-        type: boolean
-        default: false
-      approved_exe_sha256:
-        description: Exact EXE SHA-256 separately authorized for external submission (required if submit is true)
-        type: string
-        required: false
-      submit_to_virustotal:
-        description: Explicitly authorize submission of this exact release EXE to VirusTotal
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -32,111 +15,93 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Find exact release tag
-        id: tag
-        env:
-          REQUESTED_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          tag="${REQUESTED_TAG:-v$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "live-match-collector").version')}"
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          refs=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}")
-          if [[ -z "$refs" ]]; then
-            if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then exit 1; fi
-            exit 0
-          fi
-          sha=$(awk -v ref="refs/tags/$tag^{}" '$2==ref {print $1}' <<< "$refs")
-          sha="${sha:-$(awk -v ref="refs/tags/$tag" '$2==ref {print $1}' <<< "$refs")}"
-          [[ "$sha" == "$GITHUB_SHA" ]]
-          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
   release:
-    needs: prepare
-    if: needs.prepare.outputs.tag != ''
+    if: >-
+      github.repository == 'EarlySalty/deadlock-live-match-collector' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_sha == github.sha))
     environment: release
-    outputs:
-      digest: ${{ steps.handoff.outputs.digest }}
-      version: ${{ steps.handoff.outputs.version }}
-      exe_sha: ${{ steps.handoff.outputs.exe_sha }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
-      contents: read
+      contents: write
       actions: read
+      id-token: write
+      attestations: write
     env:
+      RELEASE_MODE: prerelease
+      RELEASE_TAG: v0.3.0
+      RELEASE_PREVIEW_ENABLED: ${{ vars.RELEASE_PREVIEW_ENABLED }}
       CLAMAV_IMAGE: ${{ vars.RELEASE_CLAMAV_IMAGE }}
-      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-      RELEASE_MODE: ${{ (inputs.prerelease) && 'prerelease' || 'stable' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Authorize trusted main and exact successful CI
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SECURITY_APPROVED: ${{ vars.RELEASE_SECURITY_APPROVED }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_SECURITY_APPROVED" = true
+          python3 packaging/release_policy.py
+          python3 packaging/release_checks.py main
+          python3 packaging/release_checks.py ci
+          [[ "$CLAMAV_IMAGE" =~ ^clamav/clamav@sha256:[0-9a-f]{64}$ ]]
+          # Never replace an existing release, even after a new push.
+          releases=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")
+          count=$(jq -er --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] | length' <<< "$releases")
+          if [[ "$count" != 0 ]]; then
+            jq -e --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] | length == 1 and .[0].draft == false and .[0].prerelease == true' <<< "$releases"
+            echo 'Already published; version is immutable.'
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+          fi
       - name: Initialize evidence
+        if: steps.scope.outputs.build == 'true'
         run: |
           mkdir -p dist
           printf 'source=%s\nrun=%s\nattempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > dist/run-evidence.txt
-      # Stable releases stay blocked. Only the exact independently approved v0.3.0
-      # desktop preview can proceed; a future version needs a separate policy review.
-      - name: Require exact desktop-preview policy authorization
-        env:
-          RELEASE_PREVIEW_SHA: ${{ vars.RELEASE_PREVIEW_SHA }}
-          RELEASE_HANDOFF_APPROVED: ${{ vars.RELEASE_HANDOFF_APPROVED }}
-        run: python3 packaging/release_policy.py
-      - name: Require configured release protections
-        env:
-          RELEASE_SECURITY_APPROVED: ${{ vars.RELEASE_SECURITY_APPROVED }}
-        run: test "$RELEASE_SECURITY_APPROVED" = true
-      - name: Require exact tag and successful CI
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 packaging/release_checks.py tag
-          python3 packaging/release_checks.py ci
-          if [[ "$RELEASE_MODE" == stable ]]; then
-            python3 packaging/release_checks.py preflight
-          fi
       - name: Audit locked Rust dependencies again
+        if: steps.scope.outputs.build == 'true'
         run: |
           cargo install --locked cargo-audit --version 0.23.0
           status=0
           cargo audit --deny warnings || status=$?
           printf 'cargo-audit-exit=%s\n' "$status" > dist/audit-status.txt
           exit "$status"
-      - name: Require owner-approved scanner image digest
-        run: |
-          [[ "$CLAMAV_IMAGE" =~ ^clamav/clamav@sha256:[0-9a-f]{64}$ ]]
       - name: Install Windows build tools
+        if: steps.scope.outputs.build == 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y gcc-mingw-w64-x86-64
           rustup show
       - name: Test, package, scan and verify
-        id: package
+        if: steps.scope.outputs.build == 'true'
         run: bash packaging/build-checks.sh
-      - name: Transfer locally verified candidate to approved private storage
-        id: handoff
+      - name: VirusTotal report for the exact packaged EXE
+        if: steps.scope.outputs.build == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.RELEASE_HANDOFF_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASE_HANDOFF_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ vars.RELEASE_HANDOFF_REGION }}
-          RELEASE_HANDOFF_BUCKET: ${{ vars.RELEASE_HANDOFF_BUCKET }}
-          RELEASE_HANDOFF_ACCOUNT: ${{ vars.RELEASE_HANDOFF_ACCOUNT }}
+          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+          VT_ALLOW_UPLOAD: ${{ vars.RELEASE_VT_UPLOAD }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          sha=$(sha256sum dist/live-match-collector.exe | cut -d ' ' -f 1)
-          printf 'exe_sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
-          printf 'Candidate EXE SHA-256: %s\n' "$sha" >> "$GITHUB_STEP_SUMMARY"
-          python3 packaging/release_handoff.py put build
-      - name: Retain text-only security evidence (including failures)
-        if: always()
+          python3 packaging/release_policy.py
+          python3 packaging/release_checks.py main
+          python3 packaging/release_checks.py ci
+          bash packaging/verify-package.sh "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
+          bash packaging/scan-virustotal.sh dist
+      - name: Retain text-only security evidence
+        if: always() && steps.scope.outputs.build == 'true'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: security-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -151,188 +116,48 @@ jobs:
             dist/dependency-gate.json
             dist/cargo-sbom.cdx.json
             dist/clamav-report.txt
-            dist/reproducibility.txt
-            dist/pe-evidence.txt
-            dist/audit-status.txt
-  scan:
-    name: VirusTotal exact EXE (${{ needs.release.outputs.exe_sha }})
-    needs: [prepare, release]
-    environment: release-scan
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      digest: ${{ steps.handoff.outputs.digest }}
-      version: ${{ steps.handoff.outputs.version }}
-    env:
-      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-      RELEASE_MODE: ${{ (inputs.prerelease) && 'prerelease' || 'stable' }}
-      RELEASE_PREVIEW_SHA: ${{ vars.RELEASE_PREVIEW_SHA }}
-      RELEASE_HANDOFF_APPROVED: ${{ vars.RELEASE_HANDOFF_APPROVED }}
-      RELEASE_SECURITY_APPROVED: ${{ vars.RELEASE_SECURITY_APPROVED }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Recheck approved scope, main, tag and CI
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$RELEASE_SECURITY_APPROVED" = true
-          python3 packaging/release_policy.py
-          python3 packaging/release_checks.py tag
-          python3 packaging/release_checks.py ci
-      - name: Retrieve immutable private build bundle
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.RELEASE_HANDOFF_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASE_HANDOFF_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ vars.RELEASE_HANDOFF_REGION }}
-          RELEASE_HANDOFF_BUCKET: ${{ vars.RELEASE_HANDOFF_BUCKET }}
-          RELEASE_HANDOFF_ACCOUNT: ${{ vars.RELEASE_HANDOFF_ACCOUNT }}
-          HANDOFF_DIGEST: ${{ needs.release.outputs.digest }}
-          HANDOFF_VERSION: ${{ needs.release.outputs.version }}
-        run: python3 packaging/release_handoff.py get build
-      - name: Verify exact transferred bytes and dependency evidence
-        run: |
-          bash packaging/verify-package.sh "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
-          python3 packaging/dependency_evidence.py dist --verify
-          python3 -B packaging/check_pe.py dist/live-match-collector.exe
-      - name: VirusTotal report for the exact packaged EXE
-        env:
-          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
-          VT_ALLOW_UPLOAD: ${{ inputs.submit_to_virustotal }}
-          VT_APPROVED_SHA256: ${{ inputs.approved_exe_sha256 }}
-          EXPECTED_EXE_SHA256: ${{ needs.release.outputs.exe_sha }}
-        run: |
-          set -euo pipefail
-          sha=$(sha256sum dist/live-match-collector.exe | cut -d ' ' -f 1)
-          test "$sha" = "$EXPECTED_EXE_SHA256"
-          if [[ "$VT_ALLOW_UPLOAD" == true ]]; then
-            test "$sha" = "$VT_APPROVED_SHA256"
-          fi
-          bash packaging/scan-virustotal.sh dist
-      - name: Transfer only a passed candidate
-        id: handoff
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.RELEASE_HANDOFF_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASE_HANDOFF_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ vars.RELEASE_HANDOFF_REGION }}
-          RELEASE_HANDOFF_BUCKET: ${{ vars.RELEASE_HANDOFF_BUCKET }}
-          RELEASE_HANDOFF_ACCOUNT: ${{ vars.RELEASE_HANDOFF_ACCOUNT }}
-        run: python3 packaging/release_handoff.py put scan
-      - name: Retain text-only VirusTotal evidence
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        with:
-          name: virustotal-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 90
-          if-no-files-found: warn
-          path: |
-            dist/SHA256SUMS.exe
             dist/virustotal-report.json
             dist/virustotal-report.md
-  attest:
-    needs: [prepare, scan]
-    environment: release-attest
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
-    env:
-      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-      RELEASE_MODE: ${{ (inputs.prerelease) && 'prerelease' || 'stable' }}
-      RELEASE_PREVIEW_SHA: ${{ vars.RELEASE_PREVIEW_SHA }}
-      RELEASE_HANDOFF_APPROVED: ${{ vars.RELEASE_HANDOFF_APPROVED }}
-      RELEASE_SECURITY_APPROVED: ${{ vars.RELEASE_SECURITY_APPROVED }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Recheck approved scope, main, tag and CI
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$RELEASE_SECURITY_APPROVED" = true
-          python3 packaging/release_policy.py
-          python3 packaging/release_checks.py tag
-          python3 packaging/release_checks.py ci
-      - name: Retrieve immutable private scan bundle
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.RELEASE_HANDOFF_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASE_HANDOFF_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ vars.RELEASE_HANDOFF_REGION }}
-          RELEASE_HANDOFF_BUCKET: ${{ vars.RELEASE_HANDOFF_BUCKET }}
-          RELEASE_HANDOFF_ACCOUNT: ${{ vars.RELEASE_HANDOFF_ACCOUNT }}
-          HANDOFF_DIGEST: ${{ needs.scan.outputs.digest }}
-          HANDOFF_VERSION: ${{ needs.scan.outputs.version }}
-        run: python3 packaging/release_handoff.py get scan
-      - name: Verify exact transferred bytes and dependency evidence
-        run: |
-          bash packaging/verify-package.sh "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
-          python3 packaging/dependency_evidence.py dist --verify
-          python3 -B packaging/check_pe.py dist/live-match-collector.exe
-      - name: Revalidate VirusTotal evidence
-        run: python3 packaging/virustotal_report.py dist --verify
-      - name: Attest the transferred ZIP, EXE and SBOM
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+            dist/audit-status.txt
+            dist/reproducibility.txt
+            dist/pe-evidence.txt
+      - name: Attest exact verified ZIP, EXE and SBOM
+        if: steps.scope.outputs.build == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            dist/live-match-collector-*.zip
+            dist/live-match-collector-0.3.0-win64.zip
             dist/live-match-collector.exe
             dist/cargo-sbom.cdx.json
-  publish:
-    needs: [prepare, scan, attest]
-    environment: release-publisher
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      actions: read
-      attestations: read
-    env:
-      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-      RELEASE_MODE: ${{ (inputs.prerelease) && 'prerelease' || 'stable' }}
-      RELEASE_PREVIEW_SHA: ${{ vars.RELEASE_PREVIEW_SHA }}
-      RELEASE_HANDOFF_APPROVED: ${{ vars.RELEASE_HANDOFF_APPROVED }}
-      RELEASE_SECURITY_APPROVED: ${{ vars.RELEASE_SECURITY_APPROVED }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Recheck approved scope, main, tag and CI
+      - name: Create immutable tag after all checks
+        if: steps.scope.outputs.build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$RELEASE_SECURITY_APPROVED" = true
+          set -euo pipefail
           python3 packaging/release_policy.py
-          python3 packaging/release_checks.py tag
+          python3 packaging/release_checks.py main
           python3 packaging/release_checks.py ci
-      - name: Retrieve immutable private scan bundle
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.RELEASE_HANDOFF_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASE_HANDOFF_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ vars.RELEASE_HANDOFF_REGION }}
-          RELEASE_HANDOFF_BUCKET: ${{ vars.RELEASE_HANDOFF_BUCKET }}
-          RELEASE_HANDOFF_ACCOUNT: ${{ vars.RELEASE_HANDOFF_ACCOUNT }}
-          HANDOFF_DIGEST: ${{ needs.scan.outputs.digest }}
-          HANDOFF_VERSION: ${{ needs.scan.outputs.version }}
-        run: python3 packaging/release_handoff.py get scan
-      - name: Verify exact transferred bytes and dependency evidence
-        run: |
           bash packaging/verify-package.sh "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
+          python3 packaging/virustotal_report.py dist --verify
           python3 packaging/dependency_evidence.py dist --verify
-          python3 -B packaging/check_pe.py dist/live-match-collector.exe
+          for subject in "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip" dist/live-match-collector.exe dist/cargo-sbom.cdx.json; do
+            gh attestation verify "$subject" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
+          done
+          refs=$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")
+          if [[ -z "$refs" ]]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" --jq '.ref'
+          fi
+          python3 packaging/release_checks.py tag
       - name: Create and verify protected draft
+        if: steps.scope.outputs.build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash packaging/create-draft.sh "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
-      - name: Publish verified release by exact release ID
-        if: inputs.publish
+      - name: Publish verified pre-release by exact release ID
+        if: steps.scope.outputs.build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash packaging/publish-verified.sh "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
