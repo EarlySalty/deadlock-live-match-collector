@@ -20,6 +20,16 @@ struct State {
 }
 thread_local! { static STATE: RefCell<Option<State>> = const { RefCell::new(None) }; }
 
+fn test_channel() -> bool {
+    std::env::var("DEADLOCK_COLLECTOR_PUBLIC_TEST_CHANNEL").as_deref() == Ok("1")
+}
+fn registry_value() -> String {
+    if test_channel() {
+        format!("{ID}-PublicTest")
+    } else {
+        ID.to_owned()
+    }
+}
 fn saved() -> Option<Version> {
     let mut data = [0u16; 128];
     let mut bytes = std::mem::size_of_val(&data) as u32;
@@ -27,7 +37,7 @@ fn saved() -> Option<Version> {
         RegGetValueW(
             HKEY_CURRENT_USER,
             wide(KEY).as_ptr(),
-            wide(ID).as_ptr(),
+            wide(&registry_value()).as_ptr(),
             RRF_RT_REG_SZ,
             null_mut(),
             data.as_mut_ptr().cast(),
@@ -46,7 +56,7 @@ fn persist(tag: &str) {
         RegSetKeyValueW(
             HKEY_CURRENT_USER,
             wide(KEY).as_ptr(),
-            wide(ID).as_ptr(),
+            wide(&registry_value()).as_ptr(),
             REG_SZ,
             data.as_ptr().cast(),
             (data.len() * 2) as u32,
@@ -71,8 +81,8 @@ pub(super) fn request(manual: bool) {
         let Some(s) = s.as_mut() else {
             return null_mut();
         };
-        if !s.popup.is_null() {
-            return if manual { s.popup } else { null_mut() };
+        if manual && !s.popup.is_null() {
+            return s.popup;
         }
         if !s.notice.begin(manual) {
             return null_mut();
@@ -84,9 +94,7 @@ pub(super) fn request(manual: bool) {
         let _ = thread::Builder::new()
             .name("release-check".into())
             .spawn(move || {
-                let test_channel =
-                    std::env::var("DEADLOCK_COLLECTOR_PUBLIC_TEST_CHANNEL").as_deref() == Ok("1");
-                let _ = tx.send(update_check::check(test_channel));
+                let _ = tx.send(update_check::check(test_channel()));
             });
         null_mut()
     });
@@ -110,15 +118,12 @@ pub(super) fn tick() {
             let manual = s.notice.finish();
             (r, manual)
         });
-        (
-            Instant::now() >= s.next && !s.notice.running && s.popup.is_null(),
-            result,
-        )
+        (Instant::now() >= s.next && !s.notice.running, result)
     });
     if let Some((result, manual)) = result {
         match result {
             Ok(Some(update)) => {
-                let allowed = STATE.with(|cell| cell.borrow().as_ref().is_some_and(|s| s.notice.should_show(&update, manual)));
+                let allowed = STATE.with(|cell| cell.borrow().as_ref().is_some_and(|s| s.popup.is_null() && s.notice.should_show(&update, manual)));
                 if allowed { popup(Some(update), "", manual); }
             }
             Ok(None) if manual => popup(None, "Keine neuere veröffentlichte Version gefunden.", true),
@@ -210,7 +215,7 @@ fn popup(update: Option<Update>, message: &str, manual: bool) {
         wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
         RegisterClassW(&wc);
         let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
+            WS_EX_APPWINDOW,
             class.as_ptr(),
             wide("Deadlock Collector – Updates").as_ptr(),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
@@ -232,7 +237,7 @@ fn popup(update: Option<Update>, message: &str, manual: bool) {
             &mut r,
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
             0,
-            WS_EX_TOOLWINDOW,
+            WS_EX_APPWINDOW,
             dpi,
         );
         SetWindowPos(
@@ -313,7 +318,7 @@ fn popup(update: Option<Update>, message: &str, manual: bool) {
         ShowWindow(hwnd, if manual { SW_SHOW } else { SW_SHOWNOACTIVATE });
         if manual {
             SetForegroundWindow(hwnd);
-            SetFocus(later);
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(later);
         }
     }
 }
@@ -479,5 +484,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 }
 pub(super) fn dialog_message(msg: &mut MSG) -> bool {
     let popup = STATE.with(|s| s.borrow().as_ref().map_or(null_mut(), |s| s.popup));
-    !popup.is_null() && unsafe { IsDialogMessageW(popup, msg) != 0 }
+    !popup.is_null()
+        && unsafe {
+            (msg.hwnd == popup || IsChild(popup, msg.hwnd) != 0)
+                && IsDialogMessageW(popup, msg) != 0
+        }
 }

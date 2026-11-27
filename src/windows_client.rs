@@ -1696,7 +1696,11 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     );
     let auto = button("Mit Windows starten · AUS", AUTO, AUTO_BOUNDS);
     let version = button(
-        concat!("Version ", env!("CARGO_PKG_VERSION"), " · Nach Updates suchen"),
+        concat!(
+            "Version ",
+            env!("CARGO_PKG_VERSION"),
+            " · Nach Updates suchen"
+        ),
         updates::CHECK,
         (24, 604, 330, 30),
     );

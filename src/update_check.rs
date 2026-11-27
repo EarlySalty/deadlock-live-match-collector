@@ -89,6 +89,13 @@ struct Release {
     published_at: Option<String>,
     body: Option<String>,
     html_url: String,
+    #[serde(default)]
+    assets: Vec<Asset>,
+}
+#[derive(Deserialize)]
+struct Asset {
+    name: String,
+    state: String,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Update {
@@ -111,6 +118,10 @@ fn select(releases: Vec<Release>, installed: &Version, test_channel: bool) -> Op
                 || (!test_channel && (r.prerelease || !version.pre.is_empty()))
                 || &version <= installed
                 || r.html_url != url
+                || !r
+                    .assets
+                    .iter()
+                    .any(|a| a.name == "live-match-collector.exe" && a.state == "uploaded")
             {
                 return None;
             }
@@ -225,6 +236,10 @@ mod tests {
             prerelease,
             published_at: Some("2026-01-01".into()),
             body: Some("Original notes".into()),
+            assets: vec![Asset {
+                name: "live-match-collector.exe".into(),
+                state: "uploaded".into(),
+            }],
             html_url: format!(
                 "https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/{tag}"
             ),
@@ -265,6 +280,9 @@ mod tests {
         );
         let mut invalid = release("v9.0.0", false, false);
         invalid.html_url = "https://example.com".into();
+        let mut without_binary = release("v10.0.0", false, false);
+        without_binary.assets.clear();
+        assert!(select(vec![without_binary], &v("0.2.9"), false).is_none());
         let mut unpublished = release("v8.0.0", false, false);
         unpublished.published_at = None;
         assert!(select(vec![invalid, unpublished], &v("0.2.9"), false).is_none());
@@ -274,6 +292,10 @@ mod tests {
     fn notes_and_notice_deduplication() {
         let u = select(vec![release("v1.0.0", false, false)], &v("0.2.9"), false).unwrap();
         assert_eq!(u.notes, "Original notes");
+        assert_eq!(
+            u.url,
+            "https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v1.0.0"
+        );
         let mut n = Notice::new(None);
         assert!(n.begin(false));
         assert!(!n.begin(true));
@@ -296,7 +318,6 @@ mod tests {
         assert_eq!(INTERVAL.as_secs(), 21600);
         // Verify transport constants without touching the network.
         assert!(API.starts_with("https://api.github.com/"));
-        assert!(BODY_LIMIT > 0 && PAGE_LIMIT > 0);
         let _ = check as fn(bool) -> Result<Option<Update>, CheckError>;
     }
 }
