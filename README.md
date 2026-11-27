@@ -84,3 +84,7 @@ Logo-Rastervarianten können mit `python3 packaging/generate_logo_pixels.py` aus
 ### Nachtgold 0.2.8
 
 Hellerer neutraler Graphit-Hintergrund, abgestufte Status-/Funktionskarten, kontrastreichere Sekundärtexte und integrierte Fußzeile. DirectWrite nutzt GDI-kompatibles, pixelgerastertes natürliches Layout mit horizontaler Graustufenglättung und erhöhtem Glyphenkontrast anstelle symmetrischer vertikaler Glättung. Native Vektoricons, DPI-Manifest, Pufferung, Logo und geschützte Funktionen bleiben erhalten.
+
+### Typografie 0.2.9
+
+Segoe UI Variable Text wird aus der Windows-Systemschriftensammlung gewählt, sofern verfügbar (sonst Segoe UI). DirectWrite verwendet natürliche Laufweiten und horizontale Graustufen-Kantenglättung mit moderatem Glyphenkontrast. Haupttitel semibold, reguläre Gewichte für kleine Labels und Sekundäraktionen. Keine Änderung der akzeptierten Graphit-Farbpalette oder des Layouts; keine eingebetteten Font-Dateien.

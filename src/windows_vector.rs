@@ -5,9 +5,9 @@ use std::{
     mem::zeroed,
 };
 use windows::{
-    core::w,
+    core::{w, PCWSTR},
     Win32::{
-        Foundation::RECT as Rect,
+        Foundation::{BOOL, RECT as Rect},
         Graphics::{
             Direct2D::{Common::*, *},
             DirectWrite::*,
@@ -22,12 +22,13 @@ struct Factories {
     d2d: ID2D1Factory,
     write: IDWriteFactory,
     stroke: ID2D1StrokeStyle,
+    font_family: PCWSTR,
 }
 impl Factories {
     fn new() -> windows::core::Result<Self> {
         unsafe {
             let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let write = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            let write: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let stroke = d2d.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
                     startCap: D2D1_CAP_STYLE_ROUND,
@@ -40,7 +41,23 @@ impl Factories {
                 },
                 None,
             )?;
-            Ok(Self { d2d, write, stroke })
+            let mut fonts: Option<IDWriteFontCollection> = None;
+            write.GetSystemFontCollection(&mut fonts, false)?;
+            let fonts = fonts.ok_or_else(windows::core::Error::from_win32)?;
+            let mut index = 0;
+            let mut exists = BOOL(0);
+            fonts.FindFamilyName(w!("Segoe UI Variable Text"), &mut index, &mut exists)?;
+            let font_family = if exists.as_bool() {
+                w!("Segoe UI Variable Text")
+            } else {
+                w!("Segoe UI")
+            };
+            Ok(Self {
+                d2d,
+                write,
+                stroke,
+                font_family,
+            })
         }
     }
 }
@@ -73,6 +90,7 @@ pub(super) struct VectorFrame {
     factory: ID2D1Factory,
     write: IDWriteFactory,
     stroke: ID2D1StrokeStyle,
+    font_family: PCWSTR,
     failed: Cell<bool>,
     ended: bool,
 }
@@ -116,17 +134,17 @@ impl VectorFrame {
                 target.SetDpi(96., 96.);
                 target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-                // Use grid-fitted glyphs, not symmetric Y-axis smoothing.
-                // The latter softens small UI labels on a 96-DPI display.
-                // Explicit grayscale avoids the RGB fringes reported in 0.2.6.
+                // Natural glyph spacing with horizontal grayscale smoothing.
+                // Avoid the heavy contrast boost and GDI-compatible advances
+                // that made 0.2.8 look coarse at small sizes.
                 let params = f
                     .write
                     .CreateCustomRenderingParams(
                         2.2,
-                        1.25,
+                        0.5,
                         0.,
                         DWRITE_PIXEL_GEOMETRY_FLAT,
-                        DWRITE_RENDERING_MODE_GDI_NATURAL,
+                        DWRITE_RENDERING_MODE_NATURAL,
                     )
                     .ok()?;
                 target.SetTextRenderingParams(&params);
@@ -137,6 +155,7 @@ impl VectorFrame {
                     factory: f.d2d.clone(),
                     write: f.write.clone(),
                     stroke: f.stroke.clone(),
+                    font_family: f.font_family,
                     failed: Cell::new(false),
                     ended: false,
                 })
@@ -192,7 +211,7 @@ impl VectorFrame {
         let (center, wrap) = style;
         unsafe {
             let format = self.write.CreateTextFormat(
-                w!("Segoe UI"),
+                self.font_family,
                 None,
                 DWRITE_FONT_WEIGHT(weight),
                 DWRITE_FONT_STYLE_NORMAL,
@@ -220,15 +239,8 @@ impl VectorFrame {
                 },
                 &sign,
             )?;
-            self.write.CreateGdiCompatibleTextLayout(
-                label,
-                &format,
-                w.max(1.),
-                h.max(1.),
-                1.,
-                None,
-                true,
-            )
+            self.write
+                .CreateTextLayout(label, &format, w.max(1.), h.max(1.))
         }
     }
     pub(super) fn text_width(&self, label: &[u16], size: i32, weight: i32) -> Option<i32> {
@@ -582,10 +594,14 @@ mod tests {
                 let frame = VectorFrame::begin(dc, r)
                     .expect("Direct2D/DirectWrite must initialize without fallback");
                 frame.fill(r, 0x303030);
+                let selected = frame.font_family;
+                let name = selected.to_string().expect("font family");
+                assert!(name == "Segoe UI Variable Text" || name == "Segoe UI");
+                println!("Native font: {name}; {dpi} DPI");
                 let size = crate::window_layout::scale(15, dpi);
-                let width = frame.text_width(&label, size, 500).expect("measure");
+                let width = frame.text_width(&label, size, 400).expect("measure");
                 assert!(width > size * 6 && width < r.right);
-                frame.text(&label, r, 0xf5f5f5, size, 500, (false, false));
+                frame.text(&label, r, 0xf5f5f5, size, 400, (false, false));
                 assert!(frame.finish(), "native frame failed at {dpi} DPI");
                 GdiFlush();
                 let data = std::slice::from_raw_parts(bits.cast::<u8>(), 768 * 180 * 4);

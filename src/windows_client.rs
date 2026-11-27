@@ -605,15 +605,15 @@ unsafe extern "system" fn hover_subclass(
 }
 fn text_style(id: usize) -> (i32, i32, bool) {
     match id {
-        HEADING => (28, FW_BOLD as i32, false),
+        HEADING => (28, FW_SEMIBOLD as i32, false),
         BACKEND | GAME => (20, FW_SEMIBOLD as i32, true),
         SECTION | AUTO_LABEL => (17, FW_SEMIBOLD as i32, false),
         SAVE => (16, FW_SEMIBOLD as i32, false),
-        BRAND | FOOT => (14, FW_MEDIUM as i32, false),
-        STATUS_LABEL | CARD_LABEL | AUTO_HINT => (15, FW_MEDIUM as i32, false),
+        BRAND | FOOT => (14, FW_NORMAL as i32, false),
+        STATUS_LABEL | CARD_LABEL | AUTO_HINT => (15, FW_NORMAL as i32, false),
         SUBTLE => (15, FW_NORMAL as i32, true),
         EDIT => (15, FW_NORMAL as i32, false),
-        _ => (15, FW_MEDIUM as i32, false),
+        _ => (15, FW_NORMAL as i32, false),
     }
 }
 fn label_color(id: usize) -> u32 {
