@@ -366,8 +366,6 @@ const CARD: u32 = 0x211f1d;
 const GOLD: u32 = 0x5ea1c7;
 const FG: u32 = 0xece9e5;
 const MUTED: u32 = 0xc8c3bb;
-const GREEN: u32 = 0xa9ce78;
-const RED: u32 = 0x8b8bf0;
 const FIELD: u32 = 0x171514;
 const LINE: u32 = 0x3d3732;
 const TILE: u32 = 0x2b2927;
@@ -413,7 +411,7 @@ fn font(id: usize, dpi: u32) -> HFONT {
                 DEFAULT_CHARSET as u32,
                 OUT_DEFAULT_PRECIS as u32,
                 CLIP_DEFAULT_PRECIS as u32,
-                CLEARTYPE_QUALITY as u32,
+                ANTIALIASED_QUALITY as u32,
                 DEFAULT_PITCH as u32,
                 wide("Segoe UI").as_ptr(),
             )
@@ -593,13 +591,14 @@ unsafe extern "system" fn hover_subclass(
 }
 fn text_style(id: usize) -> (i32, i32, bool) {
     match id {
-        HEADING => (30, FW_SEMIBOLD as i32, false),
-        BACKEND | GAME => (19, FW_SEMIBOLD as i32, true),
-        SECTION | AUTO_LABEL => (16, FW_SEMIBOLD as i32, false),
-        SAVE => (15, FW_SEMIBOLD as i32, false),
-        BRAND | TITLE_LABEL | FOOT | CARD_LABEL | AUTO_HINT => (14, FW_NORMAL as i32, false),
-        SUBTLE => (14, FW_NORMAL as i32, true),
-        _ => (15, FW_NORMAL as i32, false),
+        HEADING => (30, FW_BOLD as i32, false),
+        BACKEND | GAME => (19, FW_BOLD as i32, true),
+        SECTION | AUTO_LABEL => (16, FW_BOLD as i32, false),
+        SAVE => (15, FW_BOLD as i32, false),
+        BRAND | TITLE_LABEL | FOOT | CARD_LABEL | AUTO_HINT => (13, FW_NORMAL as i32, false),
+        SUBTLE => (13, FW_NORMAL as i32, true),
+        EDIT => (15, FW_NORMAL as i32, false),
+        _ => (14, FW_NORMAL as i32, false),
     }
 }
 fn label_color(id: usize) -> u32 {
@@ -623,7 +622,18 @@ unsafe fn paint_label(
     fg: u32,
     center: bool,
 ) {
-    let (_, _, wrap) = text_style(id);
+    let (size, weight, wrap) = text_style(id);
+    if let Some(canvas) = Canvas::new(dc) {
+        if canvas.text(
+            label,
+            r,
+            fg,
+            scale(size, dpi),
+            (weight >= FW_BOLD as i32, center, wrap),
+        ) {
+            return;
+        }
+    }
     let old = SelectObject(dc, font(id, dpi));
     SetBkMode(dc, TRANSPARENT as i32);
     SetTextColor(dc, fg);
@@ -773,12 +783,18 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
             let mut measured: SIZE = zeroed();
             GetTextExtentPoint32W(item.hDC, label.as_ptr(), n as i32, &mut measured);
             SelectObject(item.hDC, old);
+            let (size, weight, _) = text_style(id);
+            let measured_width = Canvas::new(item.hDC)
+                .and_then(|canvas| {
+                    canvas.text_width(&label[..n], scale(size, dpi), weight >= FW_BOLD as i32)
+                })
+                .unwrap_or(measured.cx + sc(2));
             let (icon_left, text_left, text_right) = crate::window_layout::icon_label_group(
                 r.left + sc(8),
                 r.right - sc(8),
                 icon_size,
                 sc(8),
-                measured.cx + sc(2),
+                measured_width,
             );
             (
                 icon_left,
@@ -805,7 +821,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
             paint_label(item.hDC, id, dpi, &glyph[..1], r, fg, true);
         }
         if !icon_only {
-            paint_label(item.hDC, id, dpi, &label[..n], text_rect, fg, false);
+            paint_label(item.hDC, id, dpi, &label[..n], text_rect, fg, true);
         }
     }
     if item.itemState & 0x10 != 0 {
@@ -830,31 +846,6 @@ fn open_link(hwnd: HWND, url: &str) {
         }
     }
 }
-fn status_color(label: &str) -> u32 {
-    if label.contains("Verbunden ·") || label.contains("Live-Daten werden") {
-        GREEN
-    } else if label.contains("Ungültig")
-        || label.contains("nicht erreichbar")
-        || label.contains("fehlgeschlagen")
-        || label.contains("nicht unterstützt")
-        || label.contains("nicht verfügbar")
-    {
-        RED
-    } else {
-        GOLD
-    }
-}
-unsafe fn status_dot(dc: HDC, hwnd: HWND, dpi: u32, id: usize, x: i32, y: i32) {
-    let child = GetDlgItem(hwnd, id as i32);
-    if child.is_null() {
-        return;
-    }
-    let mut label = [0u16; 256];
-    let len = GetWindowTextW(child, label.as_mut_ptr(), 256);
-    let color = status_color(&String::from_utf16_lossy(&label[..len.max(0) as usize]));
-    rounded(dc, scaled_rect((x, y, 10, 10), dpi), color, scale(10, dpi));
-}
-
 fn show_status(ui: &Ui, status: &str) {
     let (backend, game) = status
         .split_once("\r\n")
@@ -864,18 +855,6 @@ fn show_status(ui: &Ui, status: &str) {
         backend.strip_prefix("Backend: ").unwrap_or(backend),
     );
     text(ui.game, game);
-    unsafe {
-        InvalidateRect(ui.status, null(), 1);
-        InvalidateRect(ui.game, null(), 1);
-        let parent = GetParent(ui.status);
-        if !parent.is_null() {
-            let dpi = GetDpiForWindow(parent).max(96);
-            for x in [282, 580] {
-                let r = scaled_rect((x, 153, 12, 12), dpi);
-                InvalidateRect(parent, &r, 0);
-            }
-        }
-    }
 }
 
 fn refresh_auto(ui: &Ui) {
@@ -1066,8 +1045,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             if let Some(canvas) = Canvas::new(dc) {
                 canvas.icon("key", scaled_rect((52, 342, 18, 18), dpi), MUTED);
             }
-            status_dot(dc, hwnd, dpi, BACKEND, 282, 153);
-            status_dot(dc, hwnd, dpi, GAME, 580, 153);
             let icon_size = scale(54, dpi);
             let (icon_top, _) =
                 centered(scale(HEADER_TOP, dpi), scale(HEADER_BOTTOM, dpi), icon_size);

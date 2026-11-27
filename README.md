@@ -74,3 +74,7 @@ Eigene native Titelleiste, GDI+-geglättete Karten, Schrift und Linienicons; red
 ### UI-Korrektur 0.2.6
 
 Native GDI/ClearType-Schrift statt GDI+-Schriftrasterung; GDI+ zeichnet nur Formen und Icons. Gezeichnete Karten und Bedienelemente werden gepuffert und jeweils mit einem BitBlt präsentiert. Hover reagiert nur auf Eintritt/Austritt, ohne Animationstimer. Einheitliche Linienicons und gemessene gemeinsame Icon-Text-Gruppen; Titelleiste ohne DDC-Kürzel, Fußzeile im bisherigen Stil. Keine Änderung am Installer oder Backend.
+
+### UI-Korrektur 0.2.7
+
+Die bestätigte GDI+-Schriftrasterung aus 0.2.5 (AntiAliasGridFit ohne ClearType-Farbsäume) wird wieder verwendet. Der gepufferte Zeichenpfad und die Icons aus 0.2.6 bleiben erhalten; die Icon-Text-Breite wird mit GDI+ gemessen. Die beiden Statuspunkte entfallen, Statusmeldungen bleiben erhalten. Keine Änderung an Installation, Backend oder Hintergrundbetrieb.

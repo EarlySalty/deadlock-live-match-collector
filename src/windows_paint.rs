@@ -39,6 +39,7 @@ impl Canvas {
         }
         GdipSetSmoothingMode(g, SmoothingModeAntiAlias8x8);
         GdipSetPixelOffsetMode(g, PixelOffsetModeHalf);
+        GdipSetTextRenderingHint(g, TextRenderingHintAntiAliasGridFit);
         Some(Self(g))
     }
 
@@ -270,6 +271,145 @@ impl Canvas {
                 _ => {}
             }
             GdipDeletePen(pen);
+        }
+    }
+    pub(super) fn text_width(&self, label: &[u16], size: i32, bold: bool) -> Option<i32> {
+        let name: Vec<u16> = "Segoe UI".encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            let mut family = null_mut();
+            if GdipCreateFontFamilyFromName(name.as_ptr(), null_mut(), &mut family) != 0 {
+                return None;
+            }
+            let mut font = null_mut();
+            let status = GdipCreateFont(
+                family,
+                size as f32,
+                if bold {
+                    FontStyleBold
+                } else {
+                    FontStyleRegular
+                },
+                UnitPixel,
+                &mut font,
+            );
+            GdipDeleteFontFamily(family);
+            if status != 0 {
+                return None;
+            }
+            let mut format = null_mut();
+            let result = if GdipCreateStringFormat(StringFormatFlagsNoWrap, 0, &mut format) == 0 {
+                let area = RectF {
+                    X: 0.,
+                    Y: 0.,
+                    Width: 16384.,
+                    Height: 1024.,
+                };
+                let mut bounds: RectF = std::mem::zeroed();
+                let status = GdipMeasureString(
+                    self.0,
+                    label.as_ptr(),
+                    label.len() as i32,
+                    font,
+                    &area,
+                    format,
+                    &mut bounds,
+                    null_mut(),
+                    null_mut(),
+                );
+                GdipDeleteStringFormat(format);
+                (status == 0 && bounds.Width.is_finite()).then(|| bounds.Width.ceil() as i32)
+            } else {
+                None
+            };
+            GdipDeleteFont(font);
+            result
+        }
+    }
+
+    pub(super) fn text(
+        &self,
+        label: &[u16],
+        r: RECT,
+        color: u32,
+        size: i32,
+        style: (bool, bool, bool),
+    ) -> bool {
+        let (bold, center, wrap) = style;
+        let name: Vec<u16> = "Segoe UI".encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            let mut family = null_mut();
+            if GdipCreateFontFamilyFromName(name.as_ptr(), null_mut(), &mut family) != 0 {
+                return false;
+            }
+            let mut font = null_mut();
+            let status = GdipCreateFont(
+                family,
+                size as f32,
+                if bold {
+                    FontStyleBold
+                } else {
+                    FontStyleRegular
+                },
+                UnitPixel,
+                &mut font,
+            );
+            GdipDeleteFontFamily(family);
+            if status != 0 {
+                return false;
+            }
+            let mut format = null_mut();
+            let mut brush = null_mut();
+            let ok = if GdipCreateStringFormat(
+                if wrap { 0 } else { StringFormatFlagsNoWrap },
+                0,
+                &mut format,
+            ) == 0
+            {
+                GdipSetStringFormatAlign(
+                    format,
+                    if center {
+                        StringAlignmentCenter
+                    } else {
+                        StringAlignmentNear
+                    },
+                );
+                GdipSetStringFormatLineAlign(
+                    format,
+                    if wrap {
+                        StringAlignmentNear
+                    } else {
+                        StringAlignmentCenter
+                    },
+                );
+                GdipSetStringFormatTrimming(format, StringTrimmingEllipsisCharacter);
+                let ok = if GdipCreateSolidFill(argb(color), &mut brush) == 0 {
+                    let rect = RectF {
+                        X: r.left as f32,
+                        Y: r.top as f32,
+                        Width: (r.right - r.left) as f32,
+                        Height: (r.bottom - r.top) as f32,
+                    };
+                    let ok = GdipDrawString(
+                        self.0,
+                        label.as_ptr(),
+                        label.len() as i32,
+                        font,
+                        &rect,
+                        format,
+                        brush.cast(),
+                    ) == 0;
+                    GdipDeleteBrush(brush.cast());
+                    ok
+                } else {
+                    false
+                };
+                GdipDeleteStringFormat(format);
+                ok
+            } else {
+                false
+            };
+            GdipDeleteFont(font);
+            ok
         }
     }
 }
