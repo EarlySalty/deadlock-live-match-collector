@@ -5,7 +5,7 @@ import subprocess
 root = Path(__file__).resolve().parent
 out = root / "logo-pixels"
 out.mkdir(exist_ok=True)
-for size in (64, 80, 96, 112, 128, 160, 192):
+for size in (16, 24, 32, 64, 80, 96, 112, 128, 160, 192):
     raw = bytearray(subprocess.check_output(
         ["convert", str(root / "ddc-logo.png"), "-filter", "Lanczos",
          "-resize", f"{size}x{size}", "-depth", "8", "BGRA:-"]))

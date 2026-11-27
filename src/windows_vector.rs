@@ -199,6 +199,30 @@ impl VectorFrame {
             }
         }
     }
+    /// A one-device-pixel stroke centered half a pixel inside the fill bounds.
+    pub(super) fn bordered(&self, r: RECT, fill: u32, border: u32, diameter: i32) {
+        self.rounded(r, fill, diameter);
+        if let Some(b) = self.brush(border) {
+            let mut bounds = rect(r);
+            bounds.left += 0.5;
+            bounds.top += 0.5;
+            bounds.right -= 0.5;
+            bounds.bottom -= 0.5;
+            let radius = (diameter as f32 / 2. - 0.5).max(0.);
+            unsafe {
+                self.target.DrawRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: bounds,
+                        radiusX: radius,
+                        radiusY: radius,
+                    },
+                    &b,
+                    1.,
+                    None,
+                );
+            }
+        }
+    }
     fn layout(
         &self,
         label: &[u16],
@@ -503,7 +527,10 @@ impl VectorFrame {
         // Original 192px PNG converted to premultiplied BGRA,
         // prefiltered for common physical logo sizes (not a low-res icon stretch).
         let desired = (r.right - r.left).max(1) as u32;
-        let variants: [(u32, &[u8]); 7] = [
+        let variants: [(u32, &[u8]); 10] = [
+            (16, include_bytes!("../packaging/logo-pixels/logo16.bgra")),
+            (24, include_bytes!("../packaging/logo-pixels/logo24.bgra")),
+            (32, include_bytes!("../packaging/logo-pixels/logo32.bgra")),
             (64, include_bytes!("../packaging/logo-pixels/logo64.bgra")),
             (80, include_bytes!("../packaging/logo-pixels/logo80.bgra")),
             (96, include_bytes!("../packaging/logo-pixels/logo96.bgra")),
@@ -590,10 +617,49 @@ mod tests {
             let label: Vec<u16> = "Deadlock Live Collector · Verbindung"
                 .encode_utf16()
                 .collect();
-            for dpi in [96, 144, 192] {
+            for dpi in [96, 120, 144, 168, 192] {
                 let frame = VectorFrame::begin(dc, r)
                     .expect("Direct2D/DirectWrite must initialize without fallback");
+                let (mut dx, mut dy) = (0., 0.);
+                frame.target.GetDpi(&mut dx, &mut dy);
+                assert_eq!((dx, dy), (96., 96.));
+                let pixels = frame.target.GetPixelSize();
+                assert_eq!((pixels.width, pixels.height), (768, 180));
+                assert_eq!(
+                    frame.target.GetTextAntialiasMode(),
+                    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE
+                );
+                let params = frame
+                    .target
+                    .GetTextRenderingParams()
+                    .expect("actual rendering params");
+                assert_eq!(params.GetRenderingMode(), DWRITE_RENDERING_MODE_NATURAL);
+                assert_eq!(params.GetPixelGeometry(), DWRITE_PIXEL_GEOMETRY_FLAT);
+                let mut transform = zeroed();
+                frame.target.GetTransform(&mut transform);
+                assert_eq!(
+                    (
+                        transform.M11,
+                        transform.M12,
+                        transform.M21,
+                        transform.M22,
+                        transform.M31,
+                        transform.M32
+                    ),
+                    (1., 0., 0., 1., 0., 0.)
+                );
                 frame.fill(r, 0x303030);
+                frame.bordered(
+                    RECT {
+                        left: 16,
+                        top: 8,
+                        right: 752,
+                        bottom: 40,
+                    },
+                    0x303030,
+                    0x606060,
+                    20,
+                );
                 let selected = frame.font_family;
                 let name = selected.to_string().expect("font family");
                 assert!(name == "Segoe UI Variable Text" || name == "Segoe UI");
@@ -605,6 +671,11 @@ mod tests {
                 assert!(frame.finish(), "native frame failed at {dpi} DPI");
                 GdiFlush();
                 let data = std::slice::from_raw_parts(bits.cast::<u8>(), 768 * 180 * 4);
+                // Straight center of the top card edge: the stroke covers one
+                // complete physical pixel, not two partially covered rows.
+                let pixel = |y: usize| data[(y * 768 + 384) * 4];
+                assert_eq!(pixel(8), 96, "one-pixel border");
+                assert_eq!(pixel(9), 48, "no second border pixel");
                 let mut bright = 0;
                 let mut intermediate = 0;
                 for px in data.as_chunks::<4>().0 {

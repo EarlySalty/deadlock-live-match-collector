@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent
 
 class RenderingAssetsTest(unittest.TestCase):
     def test_logo_variants_are_premultiplied_bgra(self):
-        for size in (64, 80, 96, 112, 128, 160, 192):
+        for size in (16, 24, 32, 64, 80, 96, 112, 128, 160, 192):
             with self.subTest(size=size):
                 data = (ROOT / "logo-pixels" / f"logo{size}.bgra").read_bytes()
                 self.assertEqual(len(data), size * size * 4)

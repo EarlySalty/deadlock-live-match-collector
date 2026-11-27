@@ -2,13 +2,16 @@
 pub(crate) type Bounds = (i32, i32, i32, i32);
 pub(crate) const CLIENT_W: i32 = 632;
 pub(crate) const CLIENT_H: i32 = 648;
-pub(crate) const CAPTION_H: i32 = 112;
-pub(crate) const HEADER_TOP: i32 = 16;
-pub(crate) const HEADER_BOTTOM: i32 = 102;
+pub(crate) const CAPTION_H: i32 = 34;
+pub(crate) const HEADER_TOP: i32 = 38;
+pub(crate) const HEADER_BOTTOM: i32 = 120;
 pub(crate) const EDIT_BOUNDS: Bounds = (40, 330, 552, 42);
 pub(crate) const AUTO_BOUNDS: Bounds = (536, 509, 56, 38);
-#[cfg(test)]
-pub(crate) const FOOT_BOUNDS: Bounds = (24, 590, 584, 42);
+pub(crate) const FOOT_BOUNDS: Bounds = (0, 590, CLIENT_W, CLIENT_H - 590);
+pub(crate) const MINIMIZE_BOUNDS: Bounds = (544, 2, 40, 30);
+pub(crate) const CLOSE_BOUNDS: Bounds = (586, 2, 44, 30);
+pub(crate) const HEADING_BOUNDS: Bounds = (104, 44, 504, 40);
+pub(crate) const BRAND_BOUNDS: Bounds = (106, 86, 502, 24);
 pub(crate) const CARDS: [Bounds; 4] = [
     (24, 130, 286, 118),
     (322, 130, 286, 118),
@@ -121,12 +124,18 @@ mod tests {
             ] {
                 assert!(contains(card, control));
             }
-            assert!(contains((0, 0, CLIENT_W, CAPTION_H), (572, 16, 36, 32)));
+            assert!(contains((0, 0, CLIENT_W, CAPTION_H), CLOSE_BOUNDS));
             assert!(contains((0, 0, CLIENT_W, CLIENT_H), FOOT_BOUNDS));
-            for control in [(24, 596, 290, 30), (366, 596, 110, 30), (488, 596, 120, 30)] {
+            for control in [(24, 604, 290, 30), (366, 604, 110, 30), (488, 604, 120, 30)] {
                 assert!(contains(FOOT_BOUNDS, control));
             }
-            assert!(contains((0, 0, 532, CAPTION_H), (104, 26, 416, 40)));
+            assert!(contains((0, 0, CLIENT_W, CAPTION_H), MINIMIZE_BOUNDS));
+            for control in [HEADING_BOUNDS, BRAND_BOUNDS] {
+                assert!(contains(
+                    (0, CAPTION_H, CLIENT_W, CARDS[0].1 - CAPTION_H),
+                    control
+                ));
+            }
         }
     }
 

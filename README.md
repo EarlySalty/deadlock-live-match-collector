@@ -88,3 +88,7 @@ Hellerer neutraler Graphit-Hintergrund, abgestufte Status-/Funktionskarten, kont
 ### Typografie 0.2.9
 
 Segoe UI Variable Text wird aus der Windows-Systemschriftensammlung gewählt, sofern verfügbar (sonst Segoe UI). DirectWrite verwendet natürliche Laufweiten und horizontale Graustufen-Kantenglättung mit moderatem Glyphenkontrast. Haupttitel semibold, reguläre Gewichte für kleine Labels und Sekundäraktionen. Keine Änderung der akzeptierten Graphit-Farbpalette oder des Layouts; keine eingebetteten Font-Dateien.
+
+### Abschließende Fensterpolitur 0.2.10
+
+Kompakte abgegrenzte Titelleiste mit Community-Icon, sichtbarer physikalischer 1-Pixel-Fensterrahmen, dezente 1-Pixel-Kartenkonturen, kleinere Radien und durchgehende Statusleiste. Kartenpositionen, Graphit-Farben und Typografie aus 0.2.9 bleiben bestehen. Der DirectWrite-Modus bleibt Natural mit Graustufenglättung. Der native Test überprüft die tatsächlich gesetzten Renderingparameter, die unveränderte 96-DPI-Pixelabbildung, die Identitätstransformation und die einpixelige Kontur bei 96/120/144/168/192 DPI. Debugger-Ausgabe kennzeichnet einmalig den erfolgreichen Primärpfad bzw. einen verwendeten Fallback; keine Logdateien oder Schlüsselwerte. Keine Änderung an Installation oder Collector-Funktionen.

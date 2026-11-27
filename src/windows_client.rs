@@ -4,8 +4,9 @@ use crate::{
     independent_source::open_source,
     secret,
     window_layout::{
-        centered, ink_baseline, scale, AUTO_BOUNDS, CAPTION_H, CARDS, CLIENT_H, CLIENT_W,
-        EDIT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
+        centered, ink_baseline, scale, AUTO_BOUNDS, BRAND_BOUNDS, CAPTION_H, CARDS, CLIENT_H,
+        CLIENT_W, CLOSE_BOUNDS, EDIT_BOUNDS, FOOT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
+        HEADING_BOUNDS, MINIMIZE_BOUNDS,
     },
     windows_paint::{Buffer, Canvas, Session},
     windows_vector::VectorFrame,
@@ -374,7 +375,11 @@ const FIELD: u32 = 0x211f1f;
 const LINE: u32 = 0x494646;
 const TILE: u32 = 0x3d3938;
 const STATUS_TILE: u32 = 0x45413e;
-const FOOT_BG: u32 = BG;
+const TOP_BG: u32 = 0x242222;
+const FOOT_BG: u32 = 0x242222;
+const CARD_BORDER: u32 = 0x444141;
+const FRAME: u32 = 0x565351;
+const CAPTION_LABEL: usize = 216;
 const STATUS_LABEL: usize = 215;
 const MINIMIZE: usize = 211;
 const CLOSE_WINDOW: usize = 212;
@@ -394,6 +399,7 @@ type LayoutItem = (HWND, (i32, i32, i32, i32), usize);
 thread_local! {
     static LAYOUT: RefCell<Vec<LayoutItem>> = const { RefCell::new(Vec::new()) };
     static HOVER: RefCell<Vec<(HWND,u8)>> = const { RefCell::new(Vec::new()) };
+    static RENDER_REPORTED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static FONTS: RefCell<Vec<(usize,u32,HFONT)>> = const { RefCell::new(Vec::new()) };
 }
 fn font(id: usize, dpi: u32) -> HFONT {
@@ -610,6 +616,7 @@ fn text_style(id: usize) -> (i32, i32, bool) {
         SECTION | AUTO_LABEL => (17, FW_SEMIBOLD as i32, false),
         SAVE => (16, FW_SEMIBOLD as i32, false),
         BRAND | FOOT => (14, FW_NORMAL as i32, false),
+        CAPTION_LABEL => (13, FW_NORMAL as i32, false),
         STATUS_LABEL | CARD_LABEL | AUTO_HINT => (15, FW_NORMAL as i32, false),
         SUBTLE => (15, FW_NORMAL as i32, true),
         EDIT => (15, FW_NORMAL as i32, false),
@@ -620,7 +627,7 @@ fn label_color(id: usize) -> u32 {
     match id {
         BACKEND | GAME => FG,
         BRAND => GOLD,
-        FOOT | SUBTLE | CARD_LABEL | STATUS_LABEL | AUTO_HINT => MUTED,
+        FOOT | SUBTLE | CARD_LABEL | STATUS_LABEL | AUTO_HINT | CAPTION_LABEL => MUTED,
         _ => FG,
     }
 }
@@ -771,6 +778,19 @@ impl Surface<'_> {
         }
     }
 }
+// Debugger-only, no files, network, user data or key contents.
+fn report_renderer(flag: u8, message: &str) {
+    RENDER_REPORTED.with(|reported| {
+        if reported.get() & flag == 0 {
+            reported.set(reported.get() | flag);
+            unsafe {
+                windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringW(
+                    wide(message).as_ptr(),
+                );
+            }
+        }
+    });
+}
 fn render_surface(dc: HDC, r: RECT, mut draw: impl FnMut(&Surface<'_>)) {
     if let Some(v) = VectorFrame::begin(dc, r) {
         draw(&Surface {
@@ -778,11 +798,16 @@ fn render_surface(dc: HDC, r: RECT, mut draw: impl FnMut(&Surface<'_>)) {
             vector: Some(&v),
         });
         if v.finish() {
+            report_renderer(1, "Direct2D/DirectWrite frame completed (native pixels)");
             return;
         }
     }
     // Device lost or unsupported target: redraw the entire frame with the
     // proven 0.2.5 grayscale fallback, never leave a partially drawn control.
+    report_renderer(
+        2,
+        "Direct2D unavailable: complete frame uses GDI+/GDI fallback",
+    );
     draw(&Surface { dc, vector: None });
 }
 
@@ -816,7 +841,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     let bg = if matches!(id, REPO | EXIT) {
         FOOT_BG
     } else if matches!(id, MINIMIZE | CLOSE_WINDOW) {
-        BG
+        TOP_BG
     } else {
         CARD
     };
@@ -900,7 +925,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
                 0x504c49
             };
             let color = blend(base, hot, if active { 4 } else { hover });
-            surface.rounded(r, color, sc(14));
+            surface.rounded(r, color, sc(10));
             let icon = match id {
                 SAVE => "link",
                 DASH => "external",
@@ -1123,7 +1148,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             if pt.y >= 0
                 && pt.y < scale(CAPTION_H, dpi)
                 && pt.x >= 0
-                && (pt.x < scale(532, dpi) || pt.y >= scale(48, dpi))
+                && pt.x < scale(MINIMIZE_BOUNDS.0, dpi)
             {
                 HTCAPTION as LRESULT
             } else {
@@ -1142,21 +1167,100 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             let dc = buffer.as_ref().map_or(target, Buffer::dc);
             render_surface(dc, r, |surface| {
                 surface.fill(r, BG);
+                // Native-style caption and full-width status bar. Draw separators
+                // at integer device-pixel edges, not scaled one-DIP strokes.
+                let cap = scale(CAPTION_H, dpi);
+                let foot = scale(FOOT_BOUNDS.1, dpi);
+                surface.fill(
+                    RECT {
+                        left: 1,
+                        top: 1,
+                        right: r.right - 1,
+                        bottom: cap,
+                    },
+                    TOP_BG,
+                );
+                surface.fill(
+                    RECT {
+                        left: 1,
+                        top: cap - 1,
+                        right: r.right - 1,
+                        bottom: cap,
+                    },
+                    LINE,
+                );
+                surface.fill(
+                    RECT {
+                        left: 1,
+                        top: foot,
+                        right: r.right - 1,
+                        bottom: r.bottom - 1,
+                    },
+                    FOOT_BG,
+                );
+                surface.fill(
+                    RECT {
+                        left: 1,
+                        top: foot,
+                        right: r.right - 1,
+                        bottom: foot + 1,
+                    },
+                    LINE,
+                );
+                surface.logo(scaled_rect((12, 9, 16, 16), dpi));
+                let caption = wide(TITLE);
+                surface.label(
+                    CAPTION_LABEL,
+                    dpi,
+                    &caption[..caption.len() - 1],
+                    scaled_rect((36, 2, 490, 30), dpi),
+                    MUTED,
+                    false,
+                );
                 for (index, bounds) in CARDS.into_iter().enumerate() {
-                    surface.rounded(
-                        scaled_rect(bounds, dpi),
-                        if index < 2 { STATUS_CARD } else { CARD },
-                        scale(28, dpi),
-                    );
+                    let card = scaled_rect(bounds, dpi);
+                    let color = if index < 2 { STATUS_CARD } else { CARD };
+                    if let Some(v) = surface.vector {
+                        v.bordered(card, color, CARD_BORDER, scale(20, dpi));
+                    } else {
+                        surface.outlined(card, color, CARD_BORDER, scale(20, dpi), 1);
+                    }
                 }
-                // The footer shares the window background, anchored by one subtle divider.
-                surface.fill(scaled_rect((24, 590, 584, 1), dpi), LINE);
+                // Visible single physical pixel frame, independent of DWM support.
+                for edge in [
+                    RECT {
+                        left: 0,
+                        top: 0,
+                        right: r.right,
+                        bottom: 1,
+                    },
+                    RECT {
+                        left: 0,
+                        top: r.bottom - 1,
+                        right: r.right,
+                        bottom: r.bottom,
+                    },
+                    RECT {
+                        left: 0,
+                        top: 1,
+                        right: 1,
+                        bottom: r.bottom - 1,
+                    },
+                    RECT {
+                        left: r.right - 1,
+                        top: 1,
+                        right: r.right,
+                        bottom: r.bottom - 1,
+                    },
+                ] {
+                    surface.fill(edge, FRAME);
+                }
                 surface.outlined(
                     scaled_rect(EDIT_BOUNDS, dpi),
                     FIELD,
                     LINE,
-                    scale(16, dpi),
-                    scale(1, dpi),
+                    scale(12, dpi),
+                    1,
                 );
                 for (x, y, name) in [
                     (40, 146, "server"),
@@ -1167,7 +1271,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                     surface.rounded(
                         scaled_rect((x, y, 32, 32), dpi),
                         if y == 146 { STATUS_TILE } else { TILE },
-                        scale(12, dpi),
+                        scale(10, dpi),
                     );
                     surface.icon(name, scaled_rect((x + 5, y + 5, 22, 22), dpi), GOLD);
                 }
@@ -1194,8 +1298,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             let id = GetDlgCtrlID(l as HWND) as usize;
             let bg = if id == EDIT {
                 FIELD
-            } else if matches!(id, HEADING | FOOT | BRAND) {
+            } else if id == FOOT {
+                FOOT_BG
+            } else if matches!(id, HEADING | BRAND) {
                 BG
+            } else if matches!(id, BACKEND | GAME | STATUS_LABEL) {
+                STATUS_CARD
             } else {
                 CARD
             };
@@ -1513,7 +1621,13 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         (&dark as *const i32).cast(),
         4,
     );
-    let corners: i32 = 2; // DWMWCP_ROUND
+    windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+        hwnd,
+        34,
+        (&FRAME as *const u32).cast(),
+        4, // DWMWA_BORDER_COLOR
+    );
+    let corners: i32 = 3; // DWMWCP_ROUNDSMALL
     windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
         hwnd,
         33,
@@ -1536,10 +1650,10 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         child
     };
     // Caption text is painted by the parent (so this area remains draggable).
-    let minimize = button("Minimieren", MINIMIZE, (532, 16, 36, 32));
-    let close = button("Schließen (Infobereich)", CLOSE_WINDOW, (572, 16, 36, 32));
-    let heading = label("Deadlock Live Collector", HEADING, (104, 26, 416, 40));
-    let brand = label("DEUTSCHE DEADLOCK COMMUNITY", BRAND, (106, 68, 414, 24));
+    let minimize = button("Minimieren", MINIMIZE, MINIMIZE_BOUNDS);
+    let close = button("Schließen (Infobereich)", CLOSE_WINDOW, CLOSE_BOUNDS);
+    let heading = label("Deadlock Live Collector", HEADING, HEADING_BOUNDS);
+    let brand = label("DEUTSCHE DEADLOCK COMMUNITY", BRAND, BRAND_BOUNDS);
     let backend_label = label("Backend", STATUS_LABEL, (80, 150, 190, 24));
     let game_label = label("Deadlock", STATUS_LABEL, (378, 150, 190, 24));
     let status = label("Verbindung wird hergestellt …", BACKEND, (40, 184, 254, 46));
@@ -1569,10 +1683,10 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     let version = label(
         concat!("Version ", env!("CARGO_PKG_VERSION"), " · Windows x64"),
         FOOT,
-        (24, 596, 290, 30),
+        (24, 604, 290, 30),
     );
-    let repo = button("GitHub", REPO, (366, 596, 110, 30));
-    let exit = button("Beenden", EXIT, (488, 596, 120, 30));
+    let repo = button("GitHub", REPO, (366, 604, 110, 30));
+    let exit = button("Beenden", EXIT, (488, 604, 120, 30));
     if [
         minimize,
         close,
