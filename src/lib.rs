@@ -20,6 +20,8 @@ mod windows_client;
 #[cfg(all(windows, not(feature = "internal-test")))]
 mod windows_install;
 #[cfg(windows)]
+mod windows_paint;
+#[cfg(windows)]
 pub use windows_client::run_windows;
 pub mod telemetry;
 

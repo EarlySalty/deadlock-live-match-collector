@@ -3,7 +3,11 @@ use crate::{
     desktop_runtime::{ConnectionProbe, Runtime, IDLE},
     independent_source::open_source,
     secret,
-    window_layout::{centered, ink_baseline, scale},
+    window_layout::{
+        centered, ink_baseline, scale, AUTO_BOUNDS, CAPTION_H, CARDS, CLIENT_H, CLIENT_W,
+        EDIT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
+    },
+    windows_paint::{Canvas, Session},
 };
 use std::{
     cell::RefCell,
@@ -20,8 +24,9 @@ use windows_sys::Win32::{
     Security::Credentials::*,
     System::{Diagnostics::ToolHelp::*, LibraryLoader::*, Registry::*, Threading::*},
     UI::{
-        Controls::{DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS},
+        Controls::{DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ODT_STATIC, WM_MOUSELEAVE},
         HiDpi::*,
+        Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT},
         Shell::*,
         WindowsAndMessaging::*,
     },
@@ -51,6 +56,7 @@ fn wide(s: &str) -> Vec<u16> {
 fn text(hwnd: HWND, s: &str) {
     unsafe {
         SetWindowTextW(hwnd, wide(s).as_ptr());
+        InvalidateRect(hwnd, null(), 0);
     }
 }
 pub(super) fn alert(s: &str) {
@@ -325,7 +331,13 @@ fn control(
             0,
             wide(class).as_ptr(),
             wide(caption).as_ptr(),
-            WS_CHILD | WS_VISIBLE | style,
+            WS_CHILD
+                | WS_VISIBLE
+                | if class == "STATIC" {
+                    SS_OWNERDRAW
+                } else {
+                    style
+                },
             r.left,
             r.top,
             r.right - r.left,
@@ -342,15 +354,22 @@ fn control(
         hwnd
     }
 }
-const BG: u32 = 0x121010;
-const CARD: u32 = 0x1c1c1c;
+const BG: u32 = 0x141211;
+const CARD: u32 = 0x211f1d;
 const GOLD: u32 = 0x5ea1c7;
 const FG: u32 = 0xece9e5;
 const MUTED: u32 = 0xbcb6ad;
 const GREEN: u32 = 0xa9ce78;
 const RED: u32 = 0x8b8bf0;
-const FIELD: u32 = 0x181616;
-const LINE: u32 = 0x38322d;
+const FIELD: u32 = 0x171514;
+const LINE: u32 = 0x3d3732;
+const TILE: u32 = 0x352b22;
+const TITLE_LABEL: usize = 210;
+const MINIMIZE: usize = 211;
+const CLOSE_WINDOW: usize = 212;
+const AUTO_LABEL: usize = 213;
+const AUTO_HINT: usize = 214;
+const SS_OWNERDRAW: u32 = 0x000d;
 const SECTION: usize = 206;
 const BRAND: usize = 207;
 const SUBTLE: usize = 208;
@@ -360,14 +379,11 @@ const BACKEND: usize = 202;
 const GAME: usize = 203;
 const FOOT: usize = 204;
 const EDIT: usize = 205;
-const EDIT_BOUNDS: (i32, i32, i32, i32) = (40, 305, 552, 34);
-// Win32 STATIC style (not exported by windows-sys 0.61).
-const SS_CENTERIMAGE: u32 = 0x0200;
-const HEADER_TOP: i32 = 20;
-const HEADER_BOTTOM: i32 = 78;
 type LayoutItem = (HWND, (i32, i32, i32, i32), usize);
 thread_local! {
     static LAYOUT: RefCell<Vec<LayoutItem>> = const { RefCell::new(Vec::new()) };
+    static HOVER: RefCell<Vec<(HWND,u8)>> = const { RefCell::new(Vec::new()) };
+    static HOVER_TIMER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FONTS: RefCell<Vec<(usize,u32,HFONT)>> = const { RefCell::new(Vec::new()) };
 }
 fn font(id: usize, dpi: u32) -> HFONT {
@@ -404,9 +420,9 @@ fn font(id: usize, dpi: u32) -> HFONT {
                 DEFAULT_CHARSET as u32,
                 OUT_DEFAULT_PRECIS as u32,
                 CLIP_DEFAULT_PRECIS as u32,
-                CLEARTYPE_QUALITY as u32,
+                ANTIALIASED_QUALITY as u32,
                 DEFAULT_PITCH as u32,
-                wide("Segoe UI Variable").as_ptr(),
+                wide("Segoe UI").as_ptr(),
             )
         };
         fonts.push((kind, dpi, h));
@@ -440,9 +456,9 @@ unsafe fn apply_control_layout(child: HWND, bounds: (i32, i32, i32, i32), id: us
             SelectObject(dc, old);
             ReleaseDC(child, dc);
         }
-        r.left += scale(4, dpi);
+        r.left += scale(39, dpi);
         r.right -= scale(4, dpi);
-        let margin = scale(6, dpi) as isize;
+        let margin = scale(3, dpi) as isize;
         SendMessageW(child, EM_SETMARGINS, 3, margin | (margin << 16));
     }
     MoveWindow(child, r.left, r.top, r.right - r.left, r.bottom - r.top, 1);
@@ -493,6 +509,11 @@ unsafe fn center_button_label(dc: HDC, label: &[u16], r: &mut RECT) -> u32 {
 }
 
 unsafe fn rounded(dc: HDC, r: RECT, color: u32, radius: i32) {
+    if let Some(canvas) = Canvas::new(dc) {
+        if canvas.rounded(r, color, radius) {
+            return;
+        }
+    }
     let old_brush = SelectObject(dc, GetStockObject(DC_BRUSH));
     let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
     SetDCBrushColor(dc, color);
@@ -511,95 +532,295 @@ unsafe fn outlined(dc: HDC, r: RECT, fill: u32, border: u32, radius: i32, stroke
     rounded(dc, inner, fill, (radius - 2 * stroke).max(1));
 }
 
+fn blend(a: u32, b: u32, n: u8) -> u32 {
+    [0, 8, 16].into_iter().fold(0, |out, shift| {
+        let x = (a >> shift) & 255;
+        let y = (b >> shift) & 255;
+        out | (((x * (4 - n as u32) + y * n as u32) / 4) << shift)
+    })
+}
+fn hover_level(hwnd: HWND) -> u8 {
+    HOVER.with(|h| {
+        h.borrow()
+            .iter()
+            .find(|(w, _)| *w == hwnd)
+            .map_or(0, |(_, v)| *v)
+    })
+}
+unsafe fn start_hover_timer(hwnd: HWND) {
+    HOVER_TIMER.with(|running| {
+        if !running.get() && SetTimer(hwnd, 2, 35, None) != 0 {
+            running.set(true);
+        }
+    });
+}
+unsafe extern "system" fn hover_subclass(
+    child: HWND,
+    msg: u32,
+    w: WPARAM,
+    l: LPARAM,
+    id: usize,
+    _data: usize,
+) -> LRESULT {
+    if msg == WM_MOUSEMOVE || msg == WM_MOUSELEAVE {
+        if msg == WM_MOUSEMOVE {
+            let mut track = TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: child,
+                dwHoverTime: 0,
+            };
+            TrackMouseEvent(&mut track);
+        }
+        let parent = GetParent(child);
+        if !parent.is_null() {
+            start_hover_timer(parent);
+        }
+    } else if msg == WM_NCDESTROY {
+        RemoveWindowSubclass(child, Some(hover_subclass), id);
+    }
+    DefSubclassProc(child, msg, w, l)
+}
+unsafe fn animate_hover(hwnd: HWND) {
+    let mut pt: POINT = zeroed();
+    let over = if IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 && GetCursorPos(&mut pt) != 0 {
+        WindowFromPoint(pt)
+    } else {
+        null_mut()
+    };
+    let changes = HOVER.with(|h| {
+        let mut h = h.borrow_mut();
+        let mut changed = Vec::new();
+        for (child, step) in h.iter_mut() {
+            let next = if *child == over {
+                (*step + 1).min(4)
+            } else {
+                step.saturating_sub(1)
+            };
+            if next != *step {
+                *step = next;
+                changed.push(*child);
+            }
+        }
+        changed
+    });
+    if changes.is_empty() {
+        KillTimer(hwnd, 2);
+        HOVER_TIMER.with(|running| running.set(false));
+    }
+    for child in changes {
+        InvalidateRect(child, null(), 0);
+    }
+}
+fn text_style(id: usize) -> (i32, bool, bool) {
+    match id {
+        HEADING => (30, true, false),
+        BACKEND | GAME => (19, true, true),
+        SECTION | AUTO_LABEL => (16, true, false),
+        BRAND | TITLE_LABEL | FOOT | CARD_LABEL | AUTO_HINT => (13, false, false),
+        SUBTLE => (13, false, true),
+        SAVE => (15, true, false),
+        _ => (14, false, false),
+    }
+}
+fn label_color(id: usize) -> u32 {
+    match id {
+        BACKEND | GAME => FG,
+        BRAND => GOLD,
+        TITLE_LABEL | FOOT | SUBTLE | CARD_LABEL | AUTO_HINT => MUTED,
+        _ => FG,
+    }
+}
+unsafe fn fill(dc: HDC, r: RECT, color: u32) {
+    SetDCBrushColor(dc, color);
+    FillRect(dc, &r, GetStockObject(DC_BRUSH) as HBRUSH);
+}
+unsafe fn paint_label(
+    dc: HDC,
+    id: usize,
+    dpi: u32,
+    label: &[u16],
+    mut r: RECT,
+    fg: u32,
+    center: bool,
+) {
+    let (size, bold, wrap) = text_style(id);
+    if let Some(canvas) = Canvas::new(dc) {
+        if canvas.text(label, r, fg, scale(size, dpi), (bold, center, wrap)) {
+            return;
+        }
+    }
+    let old = SelectObject(dc, font(id, dpi));
+    SetBkMode(dc, TRANSPARENT as i32);
+    SetTextColor(dc, fg);
+    let flags = if center {
+        center_button_label(dc, label, &mut r)
+    } else if wrap {
+        DT_WORDBREAK | DT_NOPREFIX
+    } else {
+        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS
+    };
+    DrawTextW(dc, label.as_ptr(), label.len() as i32, &mut r, flags);
+    SelectObject(dc, old);
+}
+unsafe fn draw_static(item: &DRAWITEMSTRUCT) {
+    let id = item.CtlID as usize;
+    let dpi = GetDpiForWindow(item.hwndItem).max(96);
+    let bg = if matches!(id, HEADING | BRAND | FOOT | TITLE_LABEL) {
+        BG
+    } else {
+        CARD
+    };
+    fill(item.hDC, item.rcItem, bg);
+    let mut label = [0u16; 256];
+    let n = GetWindowTextW(item.hwndItem, label.as_mut_ptr(), 256).max(0) as usize;
+    let fg = label_color(id);
+    paint_label(item.hDC, id, dpi, &label[..n], item.rcItem, fg, false);
+}
 unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     let id = item.CtlID as usize;
     let dpi = GetDpiForWindow(item.hwndItem).max(96);
+    let sc = |v| scale(v, dpi);
     let r = item.rcItem;
     let active = item.itemState & 1 != 0;
-    let color = if id == SAVE {
-        if active {
-            0x497e9d
-        } else {
-            GOLD
-        }
-    } else if active {
-        0x39322b
-    } else if id == DASH || id == REPO || id == EXIT {
-        if id == DASH {
-            CARD
-        } else {
-            BG
-        }
+    let hover = hover_level(item.hwndItem);
+    let bg = if matches!(id, REPO | EXIT | MINIMIZE | CLOSE_WINDOW) {
+        BG
     } else {
-        0x252323
+        CARD
     };
-    let brush = GetStockObject(DC_BRUSH) as HBRUSH;
-    SetDCBrushColor(item.hDC, if id == REPO || id == EXIT { BG } else { CARD });
-    FillRect(item.hDC, &r, brush);
-    if id == SAVE {
-        rounded(item.hDC, r, color, scale(12, dpi));
-    } else {
-        outlined(
-            item.hDC,
-            r,
-            color,
-            if id == DASH { GOLD } else { LINE },
-            scale(12, dpi),
-            scale(1, dpi),
-        );
-    }
+    fill(item.hDC, r, bg);
     let mut label = [0u16; 128];
-    let n = GetWindowTextW(item.hwndItem, label.as_mut_ptr(), 128);
-    let old_font = SelectObject(item.hDC, font(id, dpi));
-    SetBkMode(item.hDC, TRANSPARENT as i32);
-    SetTextColor(
-        item.hDC,
-        if id == SAVE {
-            BG
-        } else if id == DASH || id == REPO {
-            GOLD
-        } else {
-            FG
-        },
-    );
-    let mut rect = r;
+    let n = GetWindowTextW(item.hwndItem, label.as_mut_ptr(), 128).max(0) as usize;
+    let fg = if id == SAVE {
+        BG
+    } else if matches!(id, REPO | EXIT | MINIMIZE | CLOSE_WINDOW | FORGET) {
+        MUTED
+    } else {
+        FG
+    };
     if id == AUTO {
-        let on = String::from_utf16_lossy(&label[..n.max(0) as usize]).ends_with("EIN");
-        let sc = |v| scale(v, dpi);
-        let (top, bottom) = centered(r.top, r.bottom, sc(20));
-        let track = RECT {
-            left: r.right - sc(48),
-            right: r.right - sc(12),
-            top,
-            bottom,
-        };
-        rounded(item.hDC, track, if on { GOLD } else { 0x59534d }, sc(20));
-        let diameter = sc(14);
-        let (thumb_top, thumb_bottom) = centered(r.top, r.bottom, diameter);
+        let state = String::from_utf16_lossy(&label[..n]);
+        let on = state.ends_with("EIN");
+        let off = state.ends_with("AUS");
+        let (top, bottom) = centered(r.top, r.bottom, sc(24));
+        let (left, right) = centered(r.left, r.right, sc(44));
+        rounded(
+            item.hDC,
+            RECT {
+                left,
+                top,
+                right,
+                bottom,
+            },
+            blend(
+                if on { GOLD } else { 0x514941 },
+                if on { 0x78b8de } else { 0x74665b },
+                hover,
+            ),
+            sc(24),
+        );
+        let diameter = sc(18);
+        let (t, b) = centered(r.top, r.bottom, diameter);
         let x = if on {
-            track.right - sc(3) - diameter
+            right - sc(3) - diameter
         } else {
-            track.left + sc(3)
+            left + sc(3)
         };
         rounded(
             item.hDC,
             RECT {
                 left: x,
+                top: t,
                 right: x + diameter,
-                top: thumb_top,
-                bottom: thumb_bottom,
+                bottom: b,
             },
             if on { BG } else { FG },
             diameter,
         );
-        rect.right -= sc(52);
+        if !on && !off {
+            if let Some(canvas) = Canvas::new(item.hDC) {
+                let q = wide("?");
+                canvas.text(
+                    &q[..1],
+                    RECT {
+                        left: x,
+                        top: t,
+                        right: x + diameter,
+                        bottom: b,
+                    },
+                    BG,
+                    sc(13),
+                    (true, true, false),
+                );
+            }
+        }
+    } else {
+        let base = if id == SAVE {
+            GOLD
+        } else if id == DASH {
+            0x302c29
+        } else {
+            bg
+        };
+        let hot = if id == SAVE {
+            0x7db8e1
+        } else if id == CLOSE_WINDOW {
+            0x494078
+        } else {
+            0x3c3531
+        };
+        let color = blend(base, hot, if active { 4 } else { hover });
+        rounded(item.hDC, r, color, sc(14));
+        let icon = match id {
+            SAVE => "link",
+            DASH => "external",
+            FORGET => "trash",
+            REPO => "code",
+            EXIT => "power",
+            MINIMIZE => "minus",
+            CLOSE_WINDOW => "close",
+            _ => "",
+        };
+        let icon_size = sc(if matches!(id, MINIMIZE | CLOSE_WINDOW) {
+            18
+        } else {
+            16
+        });
+        let (top, bottom) = centered(r.top, r.bottom, icon_size);
+        let icon_only = matches!(id, MINIMIZE | CLOSE_WINDOW);
+        let left = if icon_only {
+            centered(r.left, r.right, icon_size).0
+        } else {
+            r.left + sc(12)
+        };
+        if let Some(canvas) = Canvas::new(item.hDC) {
+            canvas.icon(
+                icon,
+                RECT {
+                    left,
+                    top,
+                    right: left + icon_size,
+                    bottom,
+                },
+                fg,
+            );
+        } else if icon_only {
+            let glyph = wide(if id == MINIMIZE { "−" } else { "×" });
+            paint_label(item.hDC, id, dpi, &glyph[..1], r, fg, true);
+        }
+        if !icon_only {
+            let text_rect = RECT {
+                left: r.left + sc(31),
+                right: r.right - sc(7),
+                ..r
+            };
+            paint_label(item.hDC, id, dpi, &label[..n], text_rect, fg, true);
+        }
     }
-    let flags = center_button_label(item.hDC, &label[..n.max(0) as usize], &mut rect);
-    DrawTextW(item.hDC, label.as_mut_ptr(), n, &mut rect, flags);
-    SelectObject(item.hDC, old_font);
     if item.itemState & 0x10 != 0 {
         let mut focus = r;
-        InflateRect(&mut focus, -4, -4);
+        InflateRect(&mut focus, -sc(3), -sc(3));
         DrawFocusRect(item.hDC, &focus);
     }
 }
@@ -625,6 +846,8 @@ fn status_color(label: &str) -> u32 {
     } else if label.contains("Ungültig")
         || label.contains("nicht erreichbar")
         || label.contains("fehlgeschlagen")
+        || label.contains("nicht unterstützt")
+        || label.contains("nicht verfügbar")
     {
         RED
     } else {
@@ -657,8 +880,8 @@ fn show_status(ui: &Ui, status: &str) {
         let parent = GetParent(ui.status);
         if !parent.is_null() {
             let dpi = GetDpiForWindow(parent).max(96);
-            for x in [42, 340] {
-                let r = scaled_rect((x, 108, 12, 12), dpi);
+            for x in [282, 580] {
+                let r = scaled_rect((x, 153, 12, 12), dpi);
                 InvalidateRect(parent, &r, 0);
             }
         }
@@ -692,6 +915,16 @@ fn change_key(ui: &mut Ui, key: Option<Zeroizing<String>>) -> Result<(), ()> {
     ui.tx.send(Command::Key(ui.generation, key)).map_err(|_| ())
 }
 fn click(hwnd: HWND, id: usize) {
+    if id == MINIMIZE || id == CLOSE_WINDOW {
+        unsafe {
+            if id == MINIMIZE {
+                ShowWindow(hwnd, SW_MINIMIZE);
+            } else {
+                SendMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
+        }
+        return;
+    }
     if id == DASH || id == REPO {
         open_link(hwnd, if id == DASH { DASH_URL } else { REPO_URL });
         return;
@@ -766,7 +999,7 @@ fn click(hwnd: HWND, id: usize) {
                     Ok(()) => text(
                         ui.notice,
                         if auto_enabled() == Ok(true) {
-                            "Autostart aktiviert. EXE am aktuellen Ort belassen."
+                            "Autostart aktiviert."
                         } else {
                             "Autostart deaktiviert."
                         },
@@ -781,41 +1014,69 @@ fn click(hwnd: HWND, id: usize) {
 }
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
+        WM_NCCALCSIZE => 0,
+        WM_NCHITTEST => {
+            let mut pt = POINT {
+                x: (l as u16 as i16) as i32,
+                y: ((l >> 16) as u16 as i16) as i32,
+            };
+            ScreenToClient(hwnd, &mut pt);
+            let dpi = GetDpiForWindow(hwnd).max(96);
+            if pt.y >= 0 && pt.y < scale(CAPTION_H, dpi) && pt.x >= 0 && pt.x < scale(540, dpi) {
+                HTCAPTION as LRESULT
+            } else {
+                HTCLIENT as LRESULT
+            }
+        }
+        WM_NCLBUTTONDBLCLK if w == HTCAPTION as usize => 0,
+        WM_ERASEBKGND => 1,
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
             let dc = BeginPaint(hwnd, &mut ps);
             let dpi = GetDpiForWindow(hwnd).max(96);
             let mut r: RECT = zeroed();
             GetClientRect(hwnd, &mut r);
-            SetDCBrushColor(dc, BG);
-            FillRect(dc, &r, GetStockObject(DC_BRUSH) as HBRUSH);
-            for (x, y, w, h) in [
-                (24, 86, 286, 132),
-                (322, 86, 286, 132),
-                (24, 234, 584, 210),
-                (24, 460, 584, 102),
-            ] {
-                outlined(
-                    dc,
-                    scaled_rect((x, y, w, h), dpi),
-                    CARD,
-                    LINE,
-                    scale(18, dpi),
-                    scale(1, dpi),
-                );
+            fill(dc, r, BG);
+            for bounds in CARDS {
+                rounded(dc, scaled_rect(bounds, dpi), CARD, scale(28, dpi));
             }
+            fill(dc, scaled_rect((24, 36, 584, 1), dpi), LINE);
+            let title = wide("DDC  /  LIVE COLLECTOR");
+            paint_label(
+                dc,
+                TITLE_LABEL,
+                dpi,
+                &title[..title.len() - 1],
+                scaled_rect((22, 2, 508, 32), dpi),
+                MUTED,
+                false,
+            );
+            fill(dc, scaled_rect((24, 590, 584, 1), dpi), LINE);
             outlined(
                 dc,
                 scaled_rect(EDIT_BOUNDS, dpi),
                 FIELD,
                 LINE,
-                scale(10, dpi),
+                scale(16, dpi),
                 scale(1, dpi),
             );
-            rounded(dc, scaled_rect((24, 80, 584, 1), dpi), LINE, 1);
-            status_dot(dc, hwnd, dpi, BACKEND, 42, 108);
-            status_dot(dc, hwnd, dpi, GAME, 340, 108);
-            let icon_size = scale(48, dpi);
+            for (x, y, name) in [
+                (40, 146, "server"),
+                (338, 146, "game"),
+                (40, 278, "shield"),
+                (40, 508, "power"),
+            ] {
+                rounded(dc, scaled_rect((x, y, 32, 32), dpi), TILE, scale(12, dpi));
+                if let Some(canvas) = Canvas::new(dc) {
+                    canvas.icon(name, scaled_rect((x + 6, y + 6, 20, 20), dpi), GOLD);
+                }
+            }
+            if let Some(canvas) = Canvas::new(dc) {
+                canvas.icon("key", scaled_rect((52, 342, 18, 18), dpi), MUTED);
+            }
+            status_dot(dc, hwnd, dpi, BACKEND, 282, 153);
+            status_dot(dc, hwnd, dpi, GAME, 580, 153);
+            let icon_size = scale(54, dpi);
             let (icon_top, _) =
                 centered(scale(HEADER_TOP, dpi), scale(HEADER_BOTTOM, dpi), icon_size);
             let icon = LoadImageW(
@@ -845,34 +1106,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
             let dc = w as HDC;
-            let child = l as HWND;
-            let id = GetDlgCtrlID(child) as usize;
-            let bg = if msg == WM_CTLCOLOREDIT {
+            let id = GetDlgCtrlID(l as HWND) as usize;
+            let bg = if id == EDIT {
                 FIELD
-            } else if id == HEADING || id == FOOT || id == BRAND {
+            } else if matches!(id, HEADING | FOOT | BRAND | TITLE_LABEL) {
                 BG
             } else {
                 CARD
             };
-            let fg = if id == BACKEND || id == GAME {
-                let mut buf = [0u16; 256];
-                let len = GetWindowTextW(child, buf.as_mut_ptr(), 256);
-                let label = String::from_utf16_lossy(&buf[..len.max(0) as usize]);
-                status_color(&label)
-            } else if id == BRAND {
-                GOLD
-            } else if id == FOOT || id == SUBTLE || id == CARD_LABEL {
-                MUTED
-            } else {
-                FG
-            };
             SetBkColor(dc, bg);
-            SetTextColor(dc, fg);
+            SetTextColor(dc, FG);
             SetDCBrushColor(dc, bg);
             GetStockObject(DC_BRUSH) as LRESULT
         }
         WM_DRAWITEM if l != 0 => {
-            draw_button(&*(l as *const DRAWITEMSTRUCT));
+            let item = &*(l as *const DRAWITEMSTRUCT);
+            if item.CtlType == ODT_STATIC {
+                draw_static(item);
+            } else {
+                draw_button(item);
+            }
             1
         }
         WM_DPICHANGED => {
@@ -883,8 +1136,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 null_mut(),
                 r.left,
                 r.top,
-                r.right - r.left,
-                r.bottom - r.top,
+                scale(CLIENT_W, dpi),
+                scale(CLIENT_H, dpi),
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
             LAYOUT.with(|items| {
@@ -928,6 +1181,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_QUERYENDSESSION => 1,
         WM_ENDSESSION if w != 0 => {
             DestroyWindow(hwnd);
+            0
+        }
+        WM_SHOWWINDOW if w == 0 => {
+            start_hover_timer(hwnd);
+            DefWindowProcW(hwnd, msg, w, l)
+        }
+        WM_SIZE if w == SIZE_MINIMIZED as usize => {
+            start_hover_timer(hwnd);
+            DefWindowProcW(hwnd, msg, w, l)
+        }
+        WM_TIMER if w == 2 => {
+            animate_hover(hwnd);
             0
         }
         WM_TIMER => {
@@ -1105,6 +1370,7 @@ pub fn run_windows() {
     }
 }
 unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
+    let _graphics = Session::start();
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     let class = wide(ID);
     let instance = GetModuleHandleW(null());
@@ -1131,8 +1397,8 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        620,
-        505,
+        CLIENT_W,
+        CLIENT_H,
         null_mut(),
         null_mut(),
         instance,
@@ -1142,27 +1408,14 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         return Err("Statusfenster konnte nicht erstellt werden.");
     }
     let dpi = GetDpiForWindow(hwnd).max(96);
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 632 * dpi as i32 / 96,
-        bottom: 622 * dpi as i32 / 96,
-    };
-    AdjustWindowRectExForDpi(
-        &mut rect,
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
-        0,
-        0,
-        dpi,
-    );
     SetWindowPos(
         hwnd,
         null_mut(),
         0,
         0,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
-        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        scale(CLIENT_W, dpi),
+        scale(CLIENT_H, dpi),
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
     );
     let dark: i32 = 1;
     windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
@@ -1178,78 +1431,32 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         (&corners as *const i32).cast(),
         4,
     );
-    let heading = control(
-        hwnd,
-        "STATIC",
-        "Deadlock Live Collector",
-        SS_CENTERIMAGE,
-        HEADING,
-        (84, 33, 510, 30),
-    );
-    let brand = control(
-        hwnd,
-        "STATIC",
-        "DEUTSCHE DEADLOCK COMMUNITY",
-        SS_CENTERIMAGE,
-        BRAND,
-        (84, 16, 510, 19),
-    );
-    let _version = control(
-        hwnd,
-        "STATIC",
-        concat!("Version ", env!("CARGO_PKG_VERSION"), " · Windows x64"),
-        SS_CENTERIMAGE,
-        FOOT,
-        (84, 62, 500, 16),
-    );
-    let _ = control(
-        hwnd,
-        "STATIC",
-        "BACKEND",
-        SS_CENTERIMAGE,
-        CARD_LABEL,
-        (60, 101, 234, 24),
-    );
-    let _ = control(
-        hwnd,
-        "STATIC",
-        "DEADLOCK",
-        SS_CENTERIMAGE,
-        CARD_LABEL,
-        (358, 101, 234, 24),
-    );
-    let status = control(
-        hwnd,
-        "STATIC",
-        "Verbindung wird hergestellt …",
-        0,
-        BACKEND,
-        (42, 138, 250, 70),
-    );
-    let game = control(
-        hwnd,
-        "STATIC",
-        "Spielstatus wird geprüft …",
-        0,
-        GAME,
-        (340, 138, 250, 70),
-    );
-    let _ = control(
-        hwnd,
-        "STATIC",
-        "Verbindungsschlüssel",
-        SS_CENTERIMAGE,
-        SECTION,
-        (40, 248, 540, 23),
-    );
-    let saved = control(
-        hwnd,
-        "STATIC",
-        "Schlüssel wird geprüft …",
-        SS_CENTERIMAGE,
-        SUBTLE,
-        (40, 275, 540, 22),
-    );
+    let label = |caption, id, bounds| control(hwnd, "STATIC", caption, 0, id, bounds);
+    let button = |caption, id, bounds| {
+        let child = control(
+            hwnd,
+            "BUTTON",
+            caption,
+            WS_TABSTOP | BS_OWNERDRAW as u32,
+            id,
+            bounds,
+        );
+        if !child.is_null() && SetWindowSubclass(child, Some(hover_subclass), 1, 0) != 0 {
+            HOVER.with(|h| h.borrow_mut().push((child, 0)));
+        }
+        child
+    };
+    // Caption text is painted by the parent (so this area remains draggable).
+    let minimize = button("Minimieren", MINIMIZE, (544, 3, 40, 30));
+    let close = button("Schließen (Infobereich)", CLOSE_WINDOW, (588, 3, 40, 30));
+    let heading = label("Live Collector", HEADING, (92, 53, 500, 38));
+    let brand = label("DEUTSCHE DEADLOCK COMMUNITY", BRAND, (94, 93, 498, 21));
+    let backend_label = label("Backend", CARD_LABEL, (80, 150, 190, 24));
+    let game_label = label("Deadlock", CARD_LABEL, (378, 150, 190, 24));
+    let status = label("Verbindung wird hergestellt …", BACKEND, (40, 184, 254, 57));
+    let game = label("Spielstatus wird geprüft …", GAME, (338, 184, 254, 57));
+    let connection = label("Verbindung", SECTION, (80, 278, 512, 32));
+    let saved = label("Schlüssel wird geprüft …", SUBTLE, (40, 310, 552, 20));
     let edit = control(
         hwnd,
         "EDIT",
@@ -1259,50 +1466,46 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         EDIT_BOUNDS,
     );
     SendMessageW(edit, EM_SETLIMITTEXT, 128, 0);
-    let button = |label, id, bounds| {
-        control(
-            hwnd,
-            "BUTTON",
-            label,
-            WS_TABSTOP | BS_OWNERDRAW as u32,
-            id,
-            bounds,
-        )
-    };
-    let save = button("Verbinden", SAVE, (40, 347, 170, 36));
-    let forget = button("Schlüssel entfernen", FORGET, (220, 347, 174, 36));
-    let dashboard = button("Dashboard öffnen", DASH, (404, 347, 188, 36));
-    let notice = control(hwnd, "STATIC", "", 0, SUBTLE, (40, 397, 552, 40));
-    let _ = control(
-        hwnd,
-        "STATIC",
-        "Einstellungen",
-        SS_CENTERIMAGE,
-        SECTION,
-        (40, 474, 540, 22),
+    let save = button("Verbinden", SAVE, (40, 382, 268, 38));
+    let dashboard = button("Dashboard öffnen", DASH, (320, 382, 272, 38));
+    let forget = button("Schlüssel entfernen", FORGET, (40, 428, 170, 32));
+    let notice = label("", SUBTLE, (218, 428, 374, 38));
+    let auto_label = label("Mit Windows starten", AUTO_LABEL, (80, 503, 420, 25));
+    let auto_hint = label(
+        "Beim Anmelden starten · X blendet ins Tray aus",
+        AUTO_HINT,
+        (80, 528, 420, 21),
     );
-    let auto = button("Mit Windows starten · AUS", AUTO, (40, 502, 246, 36));
-    let _ = control(
-        hwnd,
-        "STATIC",
-        "Schließen (X) minimiert in den Infobereich. Der Collector läuft weiter.",
-        0,
-        SUBTLE,
-        (302, 506, 290, 48),
-    );
-    let repo = button("GitHub  ↗", REPO, (24, 577, 145, 30));
-    let _ = control(
-        hwnd,
-        "STATIC",
-        concat!("Build ", env!("CARGO_PKG_VERSION"), " · x64"),
-        SS_CENTERIMAGE,
+    let auto = button("Mit Windows starten · AUS", AUTO, AUTO_BOUNDS);
+    let version = label(
+        concat!("Version ", env!("CARGO_PKG_VERSION"), " · Windows x64"),
         FOOT,
-        (184, 577, 240, 30),
+        (24, 597, 260, 26),
     );
-    let exit = button("Collector beenden", EXIT, (434, 577, 174, 30));
+    let repo = button("GitHub", REPO, (322, 595, 104, 29));
+    let exit = button("Beenden", EXIT, (446, 595, 162, 29));
     if [
-        heading, brand, status, game, edit, save, forget, dashboard, auto, exit, notice, saved,
+        minimize,
+        close,
+        heading,
+        brand,
+        backend_label,
+        game_label,
+        status,
+        game,
+        connection,
+        saved,
+        edit,
+        save,
+        dashboard,
+        forget,
+        notice,
+        auto_label,
+        auto_hint,
+        auto,
+        version,
         repo,
+        exit,
     ]
     .iter()
     .any(|p| p.is_null())
@@ -1401,6 +1604,8 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         }
     }
     KillTimer(hwnd, 1);
+    KillTimer(hwnd, 2);
+    HOVER.with(|h| h.borrow_mut().clear());
     UI.with(|cell| {
         if let Some(ui) = cell.borrow_mut().take() {
             let _ = ui.tx.send(Command::Stop);

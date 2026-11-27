@@ -1,4 +1,19 @@
 //! Pixel geometry shared by the native UI and platform-independent layout tests.
+pub(crate) type Bounds = (i32, i32, i32, i32);
+pub(crate) const CLIENT_W: i32 = 632;
+pub(crate) const CLIENT_H: i32 = 628;
+pub(crate) const CAPTION_H: i32 = 36;
+pub(crate) const HEADER_TOP: i32 = 51;
+pub(crate) const HEADER_BOTTOM: i32 = 114;
+pub(crate) const EDIT_BOUNDS: Bounds = (40, 330, 552, 42);
+pub(crate) const AUTO_BOUNDS: Bounds = (536, 509, 56, 38);
+pub(crate) const CARDS: [Bounds; 4] = [
+    (24, 130, 286, 118),
+    (322, 130, 286, 118),
+    (24, 262, 584, 212),
+    (24, 488, 584, 92),
+];
+
 pub(crate) fn scale(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32 + 48) / 96
 }
@@ -22,9 +37,10 @@ mod tests {
     fn toggle_track_thumb_and_label_share_the_button_center_at_common_dpis() {
         for dpi in [96, 120, 144, 168, 192, 240, 288] {
             for top in [0, 1, 5] {
-                let bottom = top + scale(538, dpi) - scale(502, dpi);
-                let track = centered(top, bottom, scale(20, dpi));
-                let thumb = centered(top, bottom, scale(14, dpi));
+                let bottom =
+                    top + scale(AUTO_BOUNDS.1 + AUTO_BOUNDS.3, dpi) - scale(AUTO_BOUNDS.1, dpi);
+                let track = centered(top, bottom, scale(24, dpi));
+                let thumb = centered(top, bottom, scale(18, dpi));
                 let above = scale(11, dpi);
                 let below = scale(3, dpi);
                 let baseline = ink_baseline(top, bottom, above, below);
@@ -42,9 +58,50 @@ mod tests {
     }
 
     #[test]
+    fn premium_cards_and_controls_fit_at_all_dpis() {
+        for dpi in [96, 120, 144, 168, 192, 240, 288] {
+            let edges = |(x, y, w, h): Bounds| {
+                (
+                    scale(x, dpi),
+                    scale(y, dpi),
+                    scale(x + w, dpi),
+                    scale(y + h, dpi),
+                )
+            };
+            let contains = |outer: Bounds, inner: Bounds| {
+                let (a, b, c, d) = edges(outer);
+                let (e, f, g, h) = edges(inner);
+                a <= e && b <= f && c >= g && d >= h
+            };
+            for card in CARDS {
+                assert!(contains(
+                    (0, CAPTION_H, CLIENT_W, CLIENT_H - CAPTION_H),
+                    card
+                ));
+            }
+            for (card, control) in [
+                (CARDS[2], EDIT_BOUNDS),
+                (CARDS[3], AUTO_BOUNDS),
+                (CARDS[0], (40, 184, 254, 57)),
+                (CARDS[1], (338, 184, 254, 57)),
+                (CARDS[2], (40, 382, 268, 38)),
+                (CARDS[2], (320, 382, 272, 38)),
+                (CARDS[2], (218, 428, 374, 38)),
+            ] {
+                assert!(contains(card, control));
+            }
+            assert!(contains((0, 0, CLIENT_W, CAPTION_H), (588, 3, 40, 30)));
+            assert!(contains((0, 0, CLIENT_W, CLIENT_H), (446, 595, 162, 29)));
+        }
+    }
+
+    #[test]
     fn header_icon_and_edit_inner_bounds_stay_centered() {
         for dpi in [96, 120, 144, 168, 192, 240, 288] {
-            for (top, bottom, size) in [(20, 76, 42), (305, 334, 20)] {
+            for (top, bottom, size) in [
+                (HEADER_TOP, HEADER_BOTTOM, 54),
+                (EDIT_BOUNDS.1, EDIT_BOUNDS.1 + EDIT_BOUNDS.3, 20),
+            ] {
                 let (a, b) = (scale(top, dpi), scale(bottom, dpi));
                 let span = centered(a, b, scale(size, dpi));
                 assert!((span.0 + span.1 - a - b).abs() <= 1);
