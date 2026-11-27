@@ -34,6 +34,8 @@ use windows_sys::Win32::{
     },
 };
 use zeroize::Zeroizing;
+#[path = "windows_update.rs"]
+mod updates;
 
 const TITLE: &str = "Deadlock Live Collector";
 const DASH: usize = 106;
@@ -615,7 +617,7 @@ fn text_style(id: usize) -> (i32, i32, bool) {
         BACKEND | GAME => (20, FW_SEMIBOLD as i32, true),
         SECTION | AUTO_LABEL => (17, FW_SEMIBOLD as i32, false),
         SAVE => (16, FW_SEMIBOLD as i32, false),
-        BRAND | FOOT => (14, FW_NORMAL as i32, false),
+        BRAND | FOOT | updates::CHECK => (14, FW_NORMAL as i32, false),
         CAPTION_LABEL => (13, FW_NORMAL as i32, false),
         STATUS_LABEL | CARD_LABEL | AUTO_HINT => (15, FW_NORMAL as i32, false),
         SUBTLE => (15, FW_NORMAL as i32, true),
@@ -838,7 +840,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     let r = item.rcItem;
     let active = item.itemState & 1 != 0;
     let hover = hover_level(item.hwndItem);
-    let bg = if matches!(id, REPO | EXIT) {
+    let bg = if matches!(id, REPO | EXIT | updates::CHECK) {
         FOOT_BG
     } else if matches!(id, MINIMIZE | CLOSE_WINDOW) {
         TOP_BG
@@ -931,6 +933,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
                 DASH => "external",
                 FORGET => "trash",
                 REPO => "repo",
+                updates::CHECK => "external",
                 EXIT => "power",
                 MINIMIZE => "minus",
                 CLOSE_WINDOW => "close",
@@ -1038,6 +1041,10 @@ fn change_key(ui: &mut Ui, key: Option<Zeroizing<String>>) -> Result<(), ()> {
     ui.tx.send(Command::Key(ui.generation, key)).map_err(|_| ())
 }
 fn click(hwnd: HWND, id: usize) {
+    if id == updates::CHECK {
+        updates::request(true);
+        return;
+    }
     if id == MINIMIZE || id == CLOSE_WINDOW {
         unsafe {
             if id == MINIMIZE {
@@ -1368,6 +1375,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             0
         }
         WM_DESTROY => {
+            updates::stop();
             UI.with(|cell| {
                 if let Ok(mut state) = cell.try_borrow_mut() {
                     if let Some(ui) = state.as_mut() {
@@ -1393,6 +1401,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             DefWindowProcW(hwnd, msg, w, l)
         }
         WM_TIMER => {
+            updates::tick();
             UI.with(|cell| {
                 let Ok(mut state) = cell.try_borrow_mut() else {
                     return;
@@ -1449,6 +1458,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                         });
                         AppendMenuW(menu, MF_SEPARATOR, 0, null());
                         AppendMenuW(menu, MF_STRING, DASH, wide("Dashboard öffnen").as_ptr());
+                        AppendMenuW(
+                            menu,
+                            MF_STRING,
+                            updates::CHECK,
+                            wide("Nach Updates suchen").as_ptr(),
+                        );
                         AppendMenuW(
                             menu,
                             MF_STRING
@@ -1680,10 +1695,10 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         (80, 528, 420, 21),
     );
     let auto = button("Mit Windows starten · AUS", AUTO, AUTO_BOUNDS);
-    let version = label(
-        concat!("Version ", env!("CARGO_PKG_VERSION"), " · Windows x64"),
-        FOOT,
-        (24, 604, 290, 30),
+    let version = button(
+        concat!("Version ", env!("CARGO_PKG_VERSION"), " · Nach Updates suchen"),
+        updates::CHECK,
+        (24, 604, 330, 30),
     );
     let repo = button("GitHub", REPO, (366, 604, 110, 30));
     let exit = button("Beenden", EXIT, (488, 604, 120, 30));
@@ -1796,12 +1811,13 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         }
     });
     SetTimer(hwnd, 1, 1000, None);
+    updates::start();
     if !startup || !configured {
         show(hwnd);
     }
     let mut msg: MSG = zeroed();
     while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-        if IsDialogMessageW(hwnd, &msg) == 0 {
+        if !updates::dialog_message(&mut msg) && IsDialogMessageW(hwnd, &msg) == 0 {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

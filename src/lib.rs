@@ -14,6 +14,8 @@ pub mod limits;
 mod model_wire_tests;
 mod secret;
 #[cfg(any(windows, test))]
+mod update_check;
+#[cfg(any(windows, test))]
 mod window_layout;
 #[cfg(windows)]
 mod windows_client;
