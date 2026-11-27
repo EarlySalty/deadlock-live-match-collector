@@ -1,4 +1,4 @@
-//! Native per-user desktop application. No service, injection, elevation or installer.
+//! Native per-user desktop application. No service, injection or elevation.
 use crate::{
     desktop_runtime::{ConnectionProbe, Runtime, IDLE},
     independent_source::open_source,
@@ -53,7 +53,7 @@ fn text(hwnd: HWND, s: &str) {
         SetWindowTextW(hwnd, wide(s).as_ptr());
     }
 }
-fn alert(s: &str) {
+pub(super) fn alert(s: &str) {
     unsafe {
         MessageBoxW(
             null_mut(),
@@ -169,9 +169,16 @@ fn auto_enabled() -> Result<bool, ()> {
     }
 }
 fn set_auto(enable: bool) -> Result<(), ()> {
+    if enable {
+        let exe = std::env::current_exe().map_err(|_| ())?;
+        set_auto_path(true, &exe)
+    } else {
+        set_auto_path(false, std::path::Path::new(""))
+    }
+}
+pub(super) fn set_auto_path(enable: bool, exe: &std::path::Path) -> Result<(), ()> {
     unsafe {
         let rc = if enable {
-            let exe = std::env::current_exe().map_err(|_| ())?;
             let mut command = vec![34u16];
             command.extend(exe.as_os_str().encode_wide());
             command.extend(wide("\" --autostart"));
@@ -342,17 +349,22 @@ const FG: u32 = 0xece9e5;
 const MUTED: u32 = 0xbcb6ad;
 const GREEN: u32 = 0xa9ce78;
 const RED: u32 = 0x8b8bf0;
-const FIELD: u32 = 0x292525;
+const FIELD: u32 = 0x181616;
+const LINE: u32 = 0x38322d;
+const SECTION: usize = 206;
+const BRAND: usize = 207;
+const SUBTLE: usize = 208;
+const CARD_LABEL: usize = 209;
 const HEADING: usize = 201;
 const BACKEND: usize = 202;
 const GAME: usize = 203;
 const FOOT: usize = 204;
 const EDIT: usize = 205;
-const EDIT_BOUNDS: (i32, i32, i32, i32) = (40, 305, 552, 29);
+const EDIT_BOUNDS: (i32, i32, i32, i32) = (40, 305, 552, 34);
 // Win32 STATIC style (not exported by windows-sys 0.61).
 const SS_CENTERIMAGE: u32 = 0x0200;
 const HEADER_TOP: i32 = 20;
-const HEADER_BOTTOM: i32 = 76;
+const HEADER_BOTTOM: i32 = 78;
 type LayoutItem = (HWND, (i32, i32, i32, i32), usize);
 thread_local! {
     static LAYOUT: RefCell<Vec<LayoutItem>> = const { RefCell::new(Vec::new()) };
@@ -363,6 +375,10 @@ fn font(id: usize, dpi: u32) -> HFONT {
         1
     } else if id == BACKEND || id == GAME {
         2
+    } else if id == SECTION || id == SAVE {
+        3
+    } else if id == BRAND || id == CARD_LABEL || id == SUBTLE || id == FOOT {
+        4
     } else {
         0
     };
@@ -373,11 +389,11 @@ fn font(id: usize, dpi: u32) -> HFONT {
         }
         let h = unsafe {
             CreateFontW(
-                -scale([15, 26, 17][kind], dpi),
+                -scale([15, 26, 19, 16, 13][kind], dpi),
                 0,
                 0,
                 0,
-                if kind == 0 {
+                if kind == 0 || kind == 4 {
                     FW_NORMAL as i32
                 } else {
                     FW_SEMIBOLD as i32
@@ -484,6 +500,17 @@ unsafe fn rounded(dc: HDC, r: RECT, color: u32, radius: i32) {
     SelectObject(dc, old_pen);
     SelectObject(dc, old_brush);
 }
+unsafe fn outlined(dc: HDC, r: RECT, fill: u32, border: u32, radius: i32, stroke: i32) {
+    rounded(dc, r, border, radius);
+    let inner = RECT {
+        left: r.left + stroke,
+        top: r.top + stroke,
+        right: r.right - stroke,
+        bottom: r.bottom - stroke,
+    };
+    rounded(dc, inner, fill, (radius - 2 * stroke).max(1));
+}
+
 unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     let id = item.CtlID as usize;
     let dpi = GetDpiForWindow(item.hwndItem).max(96);
@@ -496,19 +523,45 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
             GOLD
         }
     } else if active {
-        0x49413a
+        0x39322b
+    } else if id == DASH || id == REPO || id == EXIT {
+        if id == DASH {
+            CARD
+        } else {
+            BG
+        }
     } else {
-        0x332d29
+        0x252323
     };
     let brush = GetStockObject(DC_BRUSH) as HBRUSH;
     SetDCBrushColor(item.hDC, if id == REPO || id == EXIT { BG } else { CARD });
     FillRect(item.hDC, &r, brush);
-    rounded(item.hDC, r, color, 12 * dpi as i32 / 96);
+    if id == SAVE {
+        rounded(item.hDC, r, color, scale(12, dpi));
+    } else {
+        outlined(
+            item.hDC,
+            r,
+            color,
+            if id == DASH { GOLD } else { LINE },
+            scale(12, dpi),
+            scale(1, dpi),
+        );
+    }
     let mut label = [0u16; 128];
     let n = GetWindowTextW(item.hwndItem, label.as_mut_ptr(), 128);
     let old_font = SelectObject(item.hDC, font(id, dpi));
     SetBkMode(item.hDC, TRANSPARENT as i32);
-    SetTextColor(item.hDC, if id == SAVE { BG } else { FG });
+    SetTextColor(
+        item.hDC,
+        if id == SAVE {
+            BG
+        } else if id == DASH || id == REPO {
+            GOLD
+        } else {
+            FG
+        },
+    );
     let mut rect = r;
     if id == AUTO {
         let on = String::from_utf16_lossy(&label[..n.max(0) as usize]).ends_with("EIN");
@@ -566,6 +619,29 @@ fn open_link(hwnd: HWND, url: &str) {
         }
     }
 }
+fn status_color(label: &str) -> u32 {
+    if label.contains("Verbunden ·") || label.contains("Live-Daten werden") {
+        GREEN
+    } else if label.contains("Ungültig")
+        || label.contains("nicht erreichbar")
+        || label.contains("fehlgeschlagen")
+    {
+        RED
+    } else {
+        GOLD
+    }
+}
+unsafe fn status_dot(dc: HDC, hwnd: HWND, dpi: u32, id: usize, x: i32, y: i32) {
+    let child = GetDlgItem(hwnd, id as i32);
+    if child.is_null() {
+        return;
+    }
+    let mut label = [0u16; 256];
+    let len = GetWindowTextW(child, label.as_mut_ptr(), 256);
+    let color = status_color(&String::from_utf16_lossy(&label[..len.max(0) as usize]));
+    rounded(dc, scaled_rect((x, y, 10, 10), dpi), color, scale(10, dpi));
+}
+
 fn show_status(ui: &Ui, status: &str) {
     let (backend, game) = status
         .split_once("\r\n")
@@ -578,6 +654,14 @@ fn show_status(ui: &Ui, status: &str) {
     unsafe {
         InvalidateRect(ui.status, null(), 1);
         InvalidateRect(ui.game, null(), 1);
+        let parent = GetParent(ui.status);
+        if !parent.is_null() {
+            let dpi = GetDpiForWindow(parent).max(96);
+            for x in [42, 340] {
+                let r = scaled_rect((x, 108, 12, 12), dpi);
+                InvalidateRect(parent, &r, 0);
+            }
+        }
     }
 }
 
@@ -711,10 +795,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 (24, 234, 584, 210),
                 (24, 460, 584, 102),
             ] {
-                rounded(dc, scaled_rect((x, y, w, h), dpi), CARD, scale(18, dpi));
+                outlined(
+                    dc,
+                    scaled_rect((x, y, w, h), dpi),
+                    CARD,
+                    LINE,
+                    scale(18, dpi),
+                    scale(1, dpi),
+                );
             }
-            rounded(dc, scaled_rect(EDIT_BOUNDS, dpi), FIELD, scale(8, dpi));
-            let icon_size = scale(42, dpi);
+            outlined(
+                dc,
+                scaled_rect(EDIT_BOUNDS, dpi),
+                FIELD,
+                LINE,
+                scale(10, dpi),
+                scale(1, dpi),
+            );
+            rounded(dc, scaled_rect((24, 80, 584, 1), dpi), LINE, 1);
+            status_dot(dc, hwnd, dpi, BACKEND, 42, 108);
+            status_dot(dc, hwnd, dpi, GAME, 340, 108);
+            let icon_size = scale(48, dpi);
             let (icon_top, _) =
                 centered(scale(HEADER_TOP, dpi), scale(HEADER_BOTTOM, dpi), icon_size);
             let icon = LoadImageW(
@@ -748,7 +849,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             let id = GetDlgCtrlID(child) as usize;
             let bg = if msg == WM_CTLCOLOREDIT {
                 FIELD
-            } else if id == HEADING || id == FOOT {
+            } else if id == HEADING || id == FOOT || id == BRAND {
                 BG
             } else {
                 CARD
@@ -757,17 +858,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 let mut buf = [0u16; 256];
                 let len = GetWindowTextW(child, buf.as_mut_ptr(), 256);
                 let label = String::from_utf16_lossy(&buf[..len.max(0) as usize]);
-                if label.contains("Verbunden ·") || label.contains("Live-Daten werden") {
-                    GREEN
-                } else if label.contains("Ungültig")
-                    || label.contains("nicht erreichbar")
-                    || label.contains("fehlgeschlagen")
-                {
-                    RED
-                } else {
-                    GOLD
-                }
-            } else if id == FOOT {
+                status_color(&label)
+            } else if id == BRAND {
+                GOLD
+            } else if id == FOOT || id == SUBTLE || id == CARD_LABEL {
                 MUTED
             } else {
                 FG
@@ -964,6 +1058,24 @@ pub fn run_windows() {
         alert("Dieses Programm akzeptiert keine weiteren Befehlszeilenargumente.");
         return;
     }
+    #[cfg(not(feature = "internal-test"))]
+    let gate = match crate::windows_install::InstallGate::acquire(ID) {
+        Ok(gate) => gate,
+        Err(reason) => {
+            alert(reason);
+            return;
+        }
+    };
+    #[cfg(not(feature = "internal-test"))]
+    match crate::windows_install::prepare(ID, EXIT, startup, auto_enabled()) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(reason) => {
+            drop(gate);
+            alert(reason);
+            return;
+        }
+    }
     unsafe {
         let mutex = CreateMutexW(null(), 0, wide(&format!("Local\\{ID}")).as_ptr());
         if mutex.is_null() {
@@ -971,10 +1083,17 @@ pub fn run_windows() {
             return;
         }
         let exists = GetLastError() == ERROR_ALREADY_EXISTS;
+        #[cfg(not(feature = "internal-test"))]
+        drop(gate);
         if exists {
             CloseHandle(mutex);
             if !startup {
-                alert("Collector läuft bereits. Öffne das Symbol im Windows-Infobereich.");
+                let window = FindWindowW(wide(ID).as_ptr(), null());
+                if !window.is_null() {
+                    PostMessageW(window, WM_COMMAND, SHOW, 0);
+                } else {
+                    alert("Collector läuft bereits. Öffne das Symbol im Windows-Infobereich.");
+                }
             }
             return;
         }
@@ -1052,13 +1171,28 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         (&dark as *const i32).cast(),
         4,
     );
+    let corners: i32 = 2; // DWMWCP_ROUND
+    windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+        hwnd,
+        33,
+        (&corners as *const i32).cast(),
+        4,
+    );
     let heading = control(
         hwnd,
         "STATIC",
         "Deadlock Live Collector",
         SS_CENTERIMAGE,
         HEADING,
-        (82, HEADER_TOP, 520, 34),
+        (84, 33, 510, 30),
+    );
+    let brand = control(
+        hwnd,
+        "STATIC",
+        "DEUTSCHE DEADLOCK COMMUNITY",
+        SS_CENTERIMAGE,
+        BRAND,
+        (84, 16, 510, 19),
     );
     let _version = control(
         hwnd,
@@ -1066,23 +1200,23 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         concat!("Version ", env!("CARGO_PKG_VERSION"), " · Windows x64"),
         SS_CENTERIMAGE,
         FOOT,
-        (82, 54, 500, 22),
+        (84, 62, 500, 16),
     );
     let _ = control(
         hwnd,
         "STATIC",
         "BACKEND",
         SS_CENTERIMAGE,
-        0,
-        (40, 100, 254, 22),
+        CARD_LABEL,
+        (60, 101, 234, 24),
     );
     let _ = control(
         hwnd,
         "STATIC",
         "DEADLOCK",
         SS_CENTERIMAGE,
-        0,
-        (338, 100, 254, 22),
+        CARD_LABEL,
+        (358, 101, 234, 24),
     );
     let status = control(
         hwnd,
@@ -1090,7 +1224,7 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         "Verbindung wird hergestellt …",
         0,
         BACKEND,
-        (40, 129, 254, 78),
+        (42, 138, 250, 70),
     );
     let game = control(
         hwnd,
@@ -1098,22 +1232,22 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         "Spielstatus wird geprüft …",
         0,
         GAME,
-        (338, 129, 254, 78),
+        (340, 138, 250, 70),
     );
     let _ = control(
         hwnd,
         "STATIC",
-        "VERBINDUNGSSCHLÜSSEL",
-        0,
-        0,
+        "Verbindungsschlüssel",
+        SS_CENTERIMAGE,
+        SECTION,
         (40, 248, 540, 23),
     );
     let saved = control(
         hwnd,
         "STATIC",
         "Schlüssel wird geprüft …",
-        0,
-        0,
+        SS_CENTERIMAGE,
+        SUBTLE,
         (40, 275, 540, 22),
     );
     let edit = control(
@@ -1138,16 +1272,23 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     let save = button("Verbinden", SAVE, (40, 347, 170, 36));
     let forget = button("Schlüssel entfernen", FORGET, (220, 347, 174, 36));
     let dashboard = button("Dashboard öffnen", DASH, (404, 347, 188, 36));
-    let notice = control(hwnd, "STATIC", "", 0, 0, (40, 394, 552, 44));
-    let _ = control(hwnd, "STATIC", "EINSTELLUNGEN", 0, 0, (40, 474, 540, 22));
+    let notice = control(hwnd, "STATIC", "", 0, SUBTLE, (40, 397, 552, 40));
+    let _ = control(
+        hwnd,
+        "STATIC",
+        "Einstellungen",
+        SS_CENTERIMAGE,
+        SECTION,
+        (40, 474, 540, 22),
+    );
     let auto = button("Mit Windows starten · AUS", AUTO, (40, 502, 246, 36));
     let _ = control(
         hwnd,
         "STATIC",
         "Schließen (X) minimiert in den Infobereich. Der Collector läuft weiter.",
         0,
-        0,
-        (302, 503, 290, 52),
+        SUBTLE,
+        (302, 506, 290, 48),
     );
     let repo = button("GitHub  ↗", REPO, (24, 577, 145, 30));
     let _ = control(
@@ -1160,7 +1301,8 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     );
     let exit = button("Collector beenden", EXIT, (434, 577, 174, 30));
     if [
-        heading, status, game, edit, save, forget, dashboard, auto, exit, notice, saved, repo,
+        heading, brand, status, game, edit, save, forget, dashboard, auto, exit, notice, saved,
+        repo,
     ]
     .iter()
     .any(|p| p.is_null())

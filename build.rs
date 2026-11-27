@@ -10,6 +10,24 @@ fn main() {
     let target = env::var("TARGET").expect("TARGET");
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let resource = root.join("packaging");
+    let mut defines = vec![
+        format!(
+            "VER_MAJOR={}",
+            env::var("CARGO_PKG_VERSION_MAJOR").expect("major")
+        ),
+        format!(
+            "VER_MINOR={}",
+            env::var("CARGO_PKG_VERSION_MINOR").expect("minor")
+        ),
+        format!(
+            "VER_PATCH={}",
+            env::var("CARGO_PKG_VERSION_PATCH").expect("patch")
+        ),
+    ];
+    if env::var_os("CARGO_FEATURE_INTERNAL_TEST").is_some() {
+        defines.push("INTERNAL_TEST=1".to_owned());
+    }
+
     if target.ends_with("-gnu") {
         let object = out.join("collector-icon.o");
         let tool = if target.starts_with("x86_64") {
@@ -19,6 +37,7 @@ fn main() {
         };
         let status = Command::new(tool)
             .current_dir(&resource)
+            .args(defines.iter().map(|d| format!("-D{d}")))
             .args(["-i", "collector.rc", "-O", "coff", "-o"])
             .arg(&object)
             .status()
@@ -33,6 +52,7 @@ fn main() {
         let status = Command::new("rc.exe")
             .current_dir(&resource)
             .arg("/nologo")
+            .args(defines.iter().map(|d| format!("/d{}", d)))
             .arg(format!("/fo{}", output.display()))
             .arg("collector.rc")
             .status()
