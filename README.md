@@ -7,7 +7,7 @@
 **A native Windows desktop companion for the Deutsche Deadlock Community Twitch integration.**
 
 [![CI/CD](https://github.com/EarlySalty/deadlock-live-match-collector/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/EarlySalty/deadlock-live-match-collector/actions/workflows/ci.yml)
-[![Latest published version (including previews)](https://img.shields.io/github/v/release/EarlySalty/deadlock-live-match-collector?include_prereleases&sort=semver&label=latest%20published&color=8957e5)](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
+[![Published version (including previews)](https://img.shields.io/github/v/release/EarlySalty/deadlock-live-match-collector?include_prereleases&sort=semver&label=version&color=8957e5)](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
 [![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4)](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-CE412B)](https://www.rust-lang.org/)
 
@@ -19,7 +19,7 @@
 
 [**Browse all published releases, including pre-releases →**](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
 
-The version badge above updates automatically as new versions are published. GitHub marks previews separately on the release page; its native Latest badge is reserved for regular releases.
+The version badge above shows the published version number and updates automatically, including pre-releases.
 
 ### v0.3.0 desktop preview
 
