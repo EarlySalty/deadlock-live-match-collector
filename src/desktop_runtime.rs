@@ -33,6 +33,16 @@ impl Runtime {
             fatal: None,
         }
     }
+    #[cfg(windows)]
+    pub(crate) fn connection_state(&self) -> &'static str {
+        if self.pid.is_none() {
+            "waiting_for_game"
+        } else if self.source.is_none() {
+            "waiting_for_source"
+        } else {
+            "running"
+        }
+    }
     pub(crate) fn set_token(&mut self, token: Option<Zeroizing<String>>) {
         if self.token.as_deref() == token.as_deref() {
             return;
@@ -182,8 +192,8 @@ impl Runtime {
     }
     fn stop_fatal(&mut self, error: FatalUpload) {
         let message = match error {
-            FatalUpload::KeyRejected => "Verbindungsschlüssel abgelehnt. Bitte neuen Schlüssel im Overlay-Baukasten erstellen und hier speichern.",
-            FatalUpload::Conflict => "Server meldet einen Sitzungskonflikt. Bitte im Overlay-Baukasten einen neuen Schlüssel erstellen und hier speichern.",
+            FatalUpload::KeyRejected => "Verbindungsschlüssel abgelehnt. Bitte neuen Schlüssel unter Tools → Live Collector erstellen und hier speichern.",
+            FatalUpload::Conflict => "Server meldet einen Sitzungskonflikt. Bitte unter Tools → Live Collector einen neuen Schlüssel erstellen und hier speichern.",
             FatalUpload::ObsoleteApi => error.message(),
         };
         self.fatal = Some(message.into());
@@ -304,6 +314,71 @@ fn send_live(
     }
     upload(client.as_ref().unwrap(), ENDPOINT, token, data).map_err(SendError::Fatal)
 }
+// A key check is independent of the game source and cannot reserve a writer
+// or upload any match values. Keep the same HTTPS and redirect policy.
+#[cfg(windows)]
+pub(crate) struct ConnectionProbe {
+    client: Option<Client>,
+    next: Instant,
+    status: &'static str,
+}
+#[cfg(windows)]
+impl ConnectionProbe {
+    pub(crate) fn new() -> Self {
+        Self {
+            client: None,
+            next: Instant::now(),
+            status: "Backend: Verbindung wird geprüft …",
+        }
+    }
+    pub(crate) fn tick(&mut self, token: Option<&str>, state: &'static str) -> &'static str {
+        let Some(token) = token else {
+            return "Backend: kein Schlüssel gespeichert.";
+        };
+        let now = Instant::now();
+        if now < self.next {
+            return self.status;
+        }
+        self.next = now + Duration::from_secs(15);
+        if self.client.is_none() {
+            match desktop_client() {
+                Ok(client) => self.client = Some(client),
+                Err(message) => {
+                    self.status = message;
+                    return self.status;
+                }
+            }
+        }
+        self.status = match probe_status(self.client.as_ref().unwrap(), ENDPOINT, token, state) {
+            Ok(code) => match code {
+                204 => "Backend: verbunden · Schlüssel bestätigt.",
+                401 => "Backend: Schlüssel abgelehnt. Bitte im Dashboard erneuern.",
+                410 => "Backend: API nicht mehr unterstützt. Bitte App aktualisieren.",
+                429 | 503 => {
+                    self.next = now + Duration::from_secs(60);
+                    "Backend: vorübergehend nicht verfügbar. Erneuter Versuch folgt."
+                }
+                _ => "Backend: Verbindung fehlgeschlagen. Erneuter Versuch folgt.",
+            },
+            Err(_) => "Backend: nicht verbunden. Erneuter Versuch folgt.",
+        };
+        self.status
+    }
+}
+#[cfg(any(windows, test))]
+fn probe_status(
+    client: &Client,
+    endpoint: &str,
+    token: &str,
+    state: &str,
+) -> Result<u16, reqwest::Error> {
+    client
+        .head(endpoint)
+        .bearer_auth(token)
+        .header("live-collector-state", state)
+        .send()
+        .map(|response| response.status().as_u16())
+}
 fn desktop_client() -> Result<Client, &'static str> {
     let builder = client_builder().https_only(true);
     #[cfg(feature = "internal-test")]
@@ -390,6 +465,60 @@ mod tests {
         assert_eq!(drops.get(), 1);
         assert!(r.client.is_none());
     }
+    #[test]
+    fn connection_probe_sends_only_authenticated_head() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!(
+            "http://{}/twitch/api/v3/live-match",
+            listener.local_addr().unwrap()
+        );
+        let server = thread::spawn(move || {
+            for response in [
+                "204 No Content",
+                "401 Unauthorized",
+                "503 Service Unavailable",
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(REQUEST_TIMEOUT)).unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    headers.push_str(&line.to_ascii_lowercase());
+                }
+                assert!(headers.starts_with("head /twitch/api/v3/live-match http/1.1\r\n"));
+                assert!(headers.contains("authorization: bearer synthetic-test-only\r\n"));
+                assert!(headers.contains("live-collector-state: waiting_for_game\r\n"));
+                assert!(!headers.contains("content-type:"));
+                assert!(!headers.contains("transfer-encoding:"));
+                write!(
+                    stream,
+                    "HTTP/1.1 {response}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                )
+                .unwrap();
+            }
+        });
+        let client = client_builder().build().unwrap();
+        for code in [204, 401, 503] {
+            assert_eq!(
+                probe_status(
+                    &client,
+                    &endpoint,
+                    "synthetic-test-only",
+                    "waiting_for_game"
+                )
+                .unwrap(),
+                code
+            );
+        }
+        server.join().unwrap();
+    }
+
     #[test]
     fn session_http_contract_and_retries() {
         use std::io::{BufRead, BufReader, Write};

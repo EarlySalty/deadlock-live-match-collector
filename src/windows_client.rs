@@ -1,6 +1,6 @@
 //! Native per-user desktop application. No service, injection, elevation or installer.
 use crate::{
-    desktop_runtime::{Runtime, IDLE},
+    desktop_runtime::{ConnectionProbe, Runtime, IDLE},
     independent_source::open_source,
     secret,
 };
@@ -188,23 +188,39 @@ enum Command {
     Stop,
 }
 fn worker(rx: mpsc::Receiver<Command>, status: Arc<Mutex<String>>, key: Option<Zeroizing<String>>) {
+    let mut probe = ConnectionProbe::new();
+    let mut token = key.clone();
     let mut runtime = Runtime::new(key);
     loop {
-        let next = runtime
-            .tick(detect(), Instant::now(), open_source)
-            .to_owned();
+        let pid = detect();
+        let game = runtime.tick(pid, Instant::now(), open_source).to_owned();
+        let state = if pid.is_err() {
+            "running"
+        } else {
+            runtime.connection_state()
+        };
+        let connection = probe.tick(token.as_deref().map(String::as_str), state);
+        let next = format!("{connection}\r\n{game}");
         if let Ok(mut shared) = status.lock() {
             *shared = next;
         }
         match rx.recv_timeout(IDLE) {
-            Ok(Command::Key(key)) => runtime.set_token(key),
+            Ok(Command::Key(key)) => {
+                token = key.clone();
+                probe = ConnectionProbe::new();
+                runtime.set_token(key);
+            }
             Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         // Drain queued commands before another poll.
         while let Ok(command) = rx.try_recv() {
             match command {
-                Command::Key(key) => runtime.set_token(key),
+                Command::Key(key) => {
+                    token = key.clone();
+                    probe = ConnectionProbe::new();
+                    runtime.set_token(key);
+                }
                 Command::Stop => return,
             }
         }
@@ -215,6 +231,7 @@ struct Ui {
     edit: HWND,
     status: HWND,
     notice: HWND,
+    saved: HWND,
     auto: HWND,
     tx: mpsc::Sender<Command>,
     shared: Arc<Mutex<String>>,
@@ -322,6 +339,9 @@ fn click(hwnd: HWND, id: usize) {
                         .map_err(|_| "Hintergrundbetrieb beendet. Bitte neu starten.")?;
                     Ok(())
                 });
+                if result.is_ok() {
+                    text(ui.saved, "Schlüssel: geschützt gespeichert");
+                }
                 text(
                     ui.notice,
                     result
@@ -332,6 +352,7 @@ fn click(hwnd: HWND, id: usize) {
             FORGET => {
                 text(ui.edit, "");
                 if forget_key().is_ok() && ui.tx.send(Command::Key(None)).is_ok() {
+                    text(ui.saved, "Schlüssel: nicht gespeichert");
                     text(
                         ui.notice,
                         "Verbindungsschlüssel entfernt. Übertragung gestoppt.",
@@ -543,8 +564,8 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        570,
-        320,
+        620,
+        505,
         null_mut(),
         null_mut(),
         instance,
@@ -553,21 +574,80 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     if hwnd.is_null() {
         return Err("Statusfenster konnte nicht erstellt werden.");
     }
+    let heading = control(
+        hwnd,
+        "STATIC",
+        "Deadlock Live Collector",
+        0,
+        0,
+        (24, 18, 560, 30),
+    );
+    let title_font = CreateFontW(
+        -23,
+        0,
+        0,
+        0,
+        FW_SEMIBOLD as i32,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET as u32,
+        OUT_DEFAULT_PRECIS as u32,
+        CLIP_DEFAULT_PRECIS as u32,
+        DEFAULT_QUALITY as u32,
+        DEFAULT_PITCH as u32,
+        wide("Segoe UI").as_ptr(),
+    );
+    if !title_font.is_null() {
+        SendMessageW(heading, WM_SETFONT, title_font as usize, 1);
+    }
+    let _ = control(
+        hwnd,
+        "STATIC",
+        "Windows-App für deinen Twitch-Kanal",
+        0,
+        0,
+        (24, 51, 560, 22),
+    );
+    let _ = control(
+        hwnd,
+        "BUTTON",
+        "Verbindungsstatus",
+        BS_GROUPBOX as u32,
+        0,
+        (20, 80, 570, 91),
+    );
     let status = control(
         hwnd,
         "STATIC",
-        "Collector wird gestartet…",
+        "Collector wird gestartet …",
         0,
         0,
-        (20, 18, 515, 55),
+        (35, 102, 540, 58),
+    );
+    let _ = control(
+        hwnd,
+        "BUTTON",
+        "Verbindungsschlüssel",
+        BS_GROUPBOX as u32,
+        0,
+        (20, 181, 570, 163),
+    );
+    let saved = control(
+        hwnd,
+        "STATIC",
+        "Schlüssel wird geprüft …",
+        0,
+        0,
+        (35, 201, 540, 21),
     );
     let _ = control(
         hwnd,
         "STATIC",
-        "Verbindungsschlüssel (aus dem Overlay-Baukasten):",
+        "Im Streamer-Dashboard: Tools → Live Collector. Nicht in OBS einfügen.",
         0,
         0,
-        (20, 80, 515, 20),
+        (35, 225, 540, 26),
     );
     let edit = control(
         hwnd,
@@ -575,16 +655,16 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         "",
         ES_PASSWORD as u32 | ES_AUTOHSCROLL as u32 | WS_BORDER | WS_TABSTOP,
         0,
-        (20, 105, 515, 25),
+        (35, 253, 540, 26),
     );
     SendMessageW(edit, EM_SETLIMITTEXT, 128, 0);
     let save = control(
         hwnd,
         "BUTTON",
         "Schlüssel speichern",
-        WS_TABSTOP,
+        WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
         SAVE,
-        (20, 140, 200, 30),
+        (35, 293, 260, 32),
     );
     let forget = control(
         hwnd,
@@ -592,7 +672,16 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         "Schlüssel entfernen",
         WS_TABSTOP,
         FORGET,
-        (230, 140, 200, 30),
+        (305, 293, 270, 32),
+    );
+    let notice = control(hwnd, "STATIC", "", 0, 0, (24, 351, 565, 43));
+    let _ = control(
+        hwnd,
+        "STATIC",
+        "Schließen (X) blendet das Fenster in den Infobereich aus.",
+        0,
+        0,
+        (24, 397, 565, 22),
     );
     let auto = control(
         hwnd,
@@ -600,7 +689,7 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         "Autostart",
         WS_TABSTOP,
         AUTO,
-        (20, 180, 230, 30),
+        (24, 428, 270, 32),
     );
     let exit = control(
         hwnd,
@@ -608,12 +697,13 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         "Beenden",
         WS_TABSTOP,
         EXIT,
-        (260, 180, 170, 30),
+        (309, 428, 270, 32),
     );
-    let notice = control(hwnd, "STATIC", "", 0, 0, (20, 220, 515, 48));
-    if [status, edit, save, forget, auto, exit, notice]
-        .iter()
-        .any(|p| p.is_null())
+    if [
+        status, edit, save, forget, auto, exit, notice, saved, heading,
+    ]
+    .iter()
+    .any(|p| p.is_null())
     {
         DestroyWindow(hwnd);
         return Err("Einstellungen konnten nicht erstellt werden.");
@@ -631,7 +721,15 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     };
     let configured = key.is_some();
     text(notice, notice_text);
-    let shared = Arc::new(Mutex::new("Warte auf Deadlock.".into()));
+    text(
+        saved,
+        if configured {
+            "Schlüssel: geschützt gespeichert"
+        } else {
+            "Schlüssel: nicht gespeichert"
+        },
+    );
+    let shared = Arc::new(Mutex::new("Backend: wird geprüft …".into()));
     let (tx, rx) = mpsc::channel();
     let worker_status = shared.clone();
     let mut tray: NOTIFYICONDATAW = zeroed();
@@ -650,6 +748,7 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         edit,
         status,
         notice,
+        saved,
         auto,
         tx,
         shared,
@@ -679,8 +778,10 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     }
     let mut msg: MSG = zeroed();
     while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+        if IsDialogMessageW(hwnd, &msg) == 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
     }
     KillTimer(hwnd, 1);
     UI.with(|cell| {
@@ -690,5 +791,8 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         }
     });
     let _ = handle.join();
+    if !title_font.is_null() {
+        DeleteObject(title_font as HGDIOBJ);
+    }
     Ok(())
 }
