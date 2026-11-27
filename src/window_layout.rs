@@ -8,6 +8,9 @@ pub(crate) const HEADER_BOTTOM: i32 = 120;
 pub(crate) const EDIT_BOUNDS: Bounds = (40, 330, 552, 42);
 pub(crate) const AUTO_BOUNDS: Bounds = (536, 509, 56, 38);
 pub(crate) const FOOT_BOUNDS: Bounds = (0, 590, CLIENT_W, CLIENT_H - 590);
+pub(crate) const UPDATE_BOUNDS: Bounds = (16, 604, 338, 30);
+pub(crate) const REPO_BOUNDS: Bounds = (366, 604, 110, 30);
+pub(crate) const EXIT_BOUNDS: Bounds = (488, 604, 120, 30);
 pub(crate) const MINIMIZE_BOUNDS: Bounds = (544, 2, 40, 30);
 pub(crate) const CLOSE_BOUNDS: Bounds = (586, 2, 44, 30);
 pub(crate) const BRAND_BOUNDS: Bounds = (104, 38, 504, 82);
@@ -125,8 +128,17 @@ mod tests {
             }
             assert!(contains((0, 0, CLIENT_W, CAPTION_H), CLOSE_BOUNDS));
             assert!(contains((0, 0, CLIENT_W, CLIENT_H), FOOT_BOUNDS));
-            for control in [(24, 604, 290, 30), (366, 604, 110, 30), (488, 604, 120, 30)] {
+            for control in [UPDATE_BOUNDS, REPO_BOUNDS, EXIT_BOUNDS] {
                 assert!(contains(FOOT_BOUNDS, control));
+            }
+            assert!(
+                (scale(UPDATE_BOUNDS.0, dpi) + scale(8, dpi) - scale(CARDS[0].0, dpi)).abs() <= 1
+            );
+            assert_eq!(EXIT_BOUNDS.0 + EXIT_BOUNDS.2, CARDS[1].0 + CARDS[1].2);
+            for pair in [[UPDATE_BOUNDS, REPO_BOUNDS], [REPO_BOUNDS, EXIT_BOUNDS]] {
+                assert_eq!(pair[0].1, pair[1].1);
+                assert_eq!(pair[0].3, pair[1].3);
+                assert!(edges(pair[0]).2 < edges(pair[1]).0);
             }
             assert!(contains((0, 0, CLIENT_W, CAPTION_H), MINIMIZE_BOUNDS));
             assert!(contains(

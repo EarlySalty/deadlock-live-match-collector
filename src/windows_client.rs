@@ -5,8 +5,8 @@ use crate::{
     secret,
     window_layout::{
         centered, ink_baseline, scale, AUTO_BOUNDS, BRAND_BOUNDS, CAPTION_H, CARDS, CLIENT_H,
-        CLIENT_W, CLOSE_BOUNDS, EDIT_BOUNDS, FOOT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
-        MINIMIZE_BOUNDS,
+        CLIENT_W, CLOSE_BOUNDS, EDIT_BOUNDS, EXIT_BOUNDS, FOOT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
+        MINIMIZE_BOUNDS, REPO_BOUNDS, UPDATE_BOUNDS,
     },
     windows_paint::{Buffer, Canvas, Session},
     windows_vector::VectorFrame,
@@ -367,9 +367,9 @@ fn control(
 }
 // COLORREF uses BGR byte order. Distinct neutral layers, with gold reserved
 // for primary actions and brand/icon accents.
-const BG: u32 = 0x1b1a1a; // #1a1a1b
-const CARD: u32 = 0x2e2c2c; // #2c2c2e
-const STATUS_CARD: u32 = 0x333030; // #303033
+const BG: u32 = 0x171616; // #161617
+const CARD: u32 = 0x282626; // #262628
+const STATUS_CARD: u32 = 0x2d2a2a; // #2a2a2d
 const GOLD: u32 = 0x5ea1c7; // #c7a15e
 const FG: u32 = 0xf5f5f5;
 const MUTED: u32 = 0xd5d3d2;
@@ -377,8 +377,8 @@ const FIELD: u32 = 0x211f1f;
 const LINE: u32 = 0x494646;
 const TILE: u32 = 0x3d3938;
 const STATUS_TILE: u32 = 0x45413e;
-const TOP_BG: u32 = 0x242222;
-const FOOT_BG: u32 = 0x242222;
+const TOP_BG: u32 = 0x201e1e;
+const FOOT_BG: u32 = 0x201e1e;
 const CARD_BORDER: u32 = 0x444141;
 const FRAME: u32 = 0x565351;
 const CAPTION_LABEL: usize = 216;
@@ -952,11 +952,17 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
                     sc(8),
                     measured_width,
                 );
+                // Keep the version/update group aligned with the card and logo edge.
+                let shift = if id == updates::CHECK {
+                    r.left + sc(8) - icon_left
+                } else {
+                    0
+                };
                 (
-                    icon_left,
+                    icon_left + shift,
                     RECT {
-                        left: text_left,
-                        right: text_right,
+                        left: text_left + shift,
+                        right: text_right + shift,
                         ..r
                     },
                 )
@@ -1700,10 +1706,10 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
             " · Nach Updates suchen"
         ),
         updates::CHECK,
-        (24, 604, 330, 30),
+        UPDATE_BOUNDS,
     );
-    let repo = button("GitHub", REPO, (366, 604, 110, 30));
-    let exit = button("Beenden", EXIT, (488, 604, 120, 30));
+    let repo = button("GitHub", REPO, REPO_BOUNDS);
+    let exit = button("Beenden", EXIT, EXIT_BOUNDS);
     if [
         minimize,
         close,
