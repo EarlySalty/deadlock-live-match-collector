@@ -1,12 +1,20 @@
 //! Collector library and fail-closed CLI runtime.
 //! Public DTO and source interfaces do not authorize a live provider.
+#[cfg(any(windows, test))]
+mod desktop_runtime;
 pub mod game_model;
 pub mod game_source;
+#[cfg(test)]
+mod hud_source;
 pub mod independent_source;
 pub mod limits;
 #[cfg(test)]
 mod model_wire_tests;
 mod secret;
+#[cfg(windows)]
+mod windows_client;
+#[cfg(windows)]
+pub use windows_client::run_windows;
 pub mod telemetry;
 
 use std::collections::HashSet;
@@ -242,7 +250,10 @@ fn source_status(error: SourceError) -> Status {
     }
 }
 
-fn read(source: &mut impl GameSource, writer: &mut Writer) -> Result<Observation, Status> {
+fn read(
+    source: &mut (impl GameSource + ?Sized),
+    writer: &mut Writer,
+) -> Result<Observation, Status> {
     let sample = source.poll().map_err(source_status)?;
     prepare(sample.as_ref(), writer)
 }
