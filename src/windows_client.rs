@@ -18,11 +18,20 @@ use windows_sys::Win32::{
     Graphics::Gdi::*,
     Security::Credentials::*,
     System::{Diagnostics::ToolHelp::*, LibraryLoader::*, Registry::*, Threading::*},
-    UI::{Controls::EM_SETLIMITTEXT, Shell::*, WindowsAndMessaging::*},
+    UI::{
+        Controls::{DRAWITEMSTRUCT, EM_SETLIMITTEXT},
+        HiDpi::*,
+        Shell::*,
+        WindowsAndMessaging::*,
+    },
 };
 use zeroize::Zeroizing;
 
-const TITLE: &str = "Deadlock Live Match Collector";
+const TITLE: &str = "Deadlock Live Collector";
+const DASH: usize = 106;
+const REPO: usize = 107;
+const DASH_URL: &str = "https://deutsche-deadlock-community.de/twitch/live-collector";
+const REPO_URL: &str = "https://github.com/EarlySalty/deadlock-live-match-collector";
 #[cfg(not(feature = "internal-test"))]
 const ID: &str = "DeadlockLiveMatchCollector";
 #[cfg(feature = "internal-test")]
@@ -184,10 +193,15 @@ fn set_auto(enable: bool) -> Result<(), ()> {
     }
 }
 enum Command {
-    Key(Option<Zeroizing<String>>),
+    Key(u64, Option<Zeroizing<String>>),
     Stop,
 }
-fn worker(rx: mpsc::Receiver<Command>, status: Arc<Mutex<String>>, key: Option<Zeroizing<String>>) {
+fn worker(
+    rx: mpsc::Receiver<Command>,
+    status: Arc<Mutex<(u64, String)>>,
+    key: Option<Zeroizing<String>>,
+) {
+    let mut generation = 0;
     let mut probe = ConnectionProbe::new();
     let mut token = key.clone();
     let mut runtime = Runtime::new(key);
@@ -200,12 +214,40 @@ fn worker(rx: mpsc::Receiver<Command>, status: Arc<Mutex<String>>, key: Option<Z
             runtime.connection_state()
         };
         let connection = probe.tick(token.as_deref().map(String::as_str), state);
-        let next = format!("{connection}\r\n{game}");
+        let backend = match connection {
+            "Backend: kein Schlüssel gespeichert." => "Nicht eingerichtet",
+            "Backend: verbunden · Schlüssel bestätigt." => "Verbunden · Schlüssel bestätigt",
+            "Backend: Schlüssel abgelehnt. Bitte im Dashboard erneuern." => "Ungültiger Schlüssel",
+            "Backend: API nicht mehr unterstützt. Bitte App aktualisieren." => {
+                "API nicht unterstützt"
+            }
+            "Backend: Verbindung wird geprüft …" => "Verbindung wird hergestellt …",
+            "Backend: nicht verbunden. Erneuter Versuch folgt." => "Server nicht erreichbar",
+            _ => "Verbindung fehlgeschlagen",
+        };
+        let game = match pid {
+            Err(()) => "Spielstatus nicht verfügbar",
+            Ok(None) => "Wartet auf Deadlock",
+            Ok(Some(_))
+                if backend == "Verbunden · Schlüssel bestätigt"
+                    && game.starts_with("Der Server hat Live-Daten bestätigt.") =>
+            {
+                "Live-Daten werden übertragen"
+            }
+            Ok(Some(_)) if state == "waiting_for_source" && token.is_some() => {
+                "Wartet auf Spielquelle"
+            }
+            Ok(Some(_)) => "Deadlock läuft",
+        };
+        let next = format!("{backend}\r\n{game}");
         if let Ok(mut shared) = status.lock() {
-            *shared = next;
+            if shared.0 == generation {
+                shared.1 = next;
+            }
         }
         match rx.recv_timeout(IDLE) {
-            Ok(Command::Key(key)) => {
+            Ok(Command::Key(next_generation, key)) => {
+                generation = next_generation;
                 token = key.clone();
                 probe = ConnectionProbe::new();
                 runtime.set_token(key);
@@ -216,7 +258,8 @@ fn worker(rx: mpsc::Receiver<Command>, status: Arc<Mutex<String>>, key: Option<Z
         // Drain queued commands before another poll.
         while let Ok(command) = rx.try_recv() {
             match command {
-                Command::Key(key) => {
+                Command::Key(next_generation, key) => {
+                    generation = next_generation;
                     token = key.clone();
                     probe = ConnectionProbe::new();
                     runtime.set_token(key);
@@ -230,12 +273,15 @@ fn worker(rx: mpsc::Receiver<Command>, status: Arc<Mutex<String>>, key: Option<Z
 struct Ui {
     edit: HWND,
     status: HWND,
+    game: HWND,
+    save: HWND,
     notice: HWND,
     saved: HWND,
     auto: HWND,
     tx: mpsc::Sender<Command>,
-    shared: Arc<Mutex<String>>,
+    shared: Arc<Mutex<(u64, String)>>,
     last: String,
+    generation: u64,
     tray: NOTIFYICONDATAW,
     taskbar: u32,
     tray_available: bool,
@@ -266,42 +312,224 @@ fn control(
 ) -> HWND {
     let (x, y, w, h) = bounds;
     unsafe {
+        let dpi = GetDpiForWindow(parent).max(96);
+        let scale = |v: i32| v * dpi as i32 / 96;
         let hwnd = CreateWindowExW(
             0,
             wide(class).as_ptr(),
             wide(caption).as_ptr(),
             WS_CHILD | WS_VISIBLE | style,
-            x,
-            y,
-            w,
-            h,
+            scale(x),
+            scale(y),
+            scale(w),
+            scale(h),
             parent,
             id as HMENU,
             GetModuleHandleW(null()),
             null(),
         );
         if !hwnd.is_null() {
-            SendMessageW(
-                hwnd,
-                WM_SETFONT,
-                GetStockObject(DEFAULT_GUI_FONT) as usize,
-                1,
-            );
+            LAYOUT.with(|items| items.borrow_mut().push((hwnd, bounds, id)));
+            SendMessageW(hwnd, WM_SETFONT, font(id, dpi) as usize, 1);
         }
         hwnd
     }
 }
+const BG: u32 = 0x121010;
+const CARD: u32 = 0x1c1c1c;
+const GOLD: u32 = 0x5ea1c7;
+const FG: u32 = 0xece9e5;
+const MUTED: u32 = 0xbcb6ad;
+const GREEN: u32 = 0xa9ce78;
+const RED: u32 = 0x8b8bf0;
+const FIELD: u32 = 0x292525;
+const HEADING: usize = 201;
+const BACKEND: usize = 202;
+const GAME: usize = 203;
+const FOOT: usize = 204;
+const EDIT: usize = 205;
+type LayoutItem = (HWND, (i32, i32, i32, i32), usize);
+thread_local! {
+    static LAYOUT: RefCell<Vec<LayoutItem>> = const { RefCell::new(Vec::new()) };
+    static FONTS: RefCell<Vec<(usize,u32,HFONT)>> = const { RefCell::new(Vec::new()) };
+}
+fn font(id: usize, dpi: u32) -> HFONT {
+    let kind = if id == HEADING {
+        1
+    } else if id == BACKEND || id == GAME {
+        2
+    } else {
+        0
+    };
+    FONTS.with(|fonts| {
+        let mut fonts = fonts.borrow_mut();
+        if let Some((_, _, h)) = fonts.iter().find(|(k, d, _)| *k == kind && *d == dpi) {
+            return *h;
+        }
+        let h = unsafe {
+            CreateFontW(
+                -([15, 26, 17][kind] * dpi as i32 / 96),
+                0,
+                0,
+                0,
+                if kind == 0 {
+                    FW_NORMAL as i32
+                } else {
+                    FW_SEMIBOLD as i32
+                },
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET as u32,
+                OUT_DEFAULT_PRECIS as u32,
+                CLIP_DEFAULT_PRECIS as u32,
+                CLEARTYPE_QUALITY as u32,
+                DEFAULT_PITCH as u32,
+                wide("Segoe UI Variable").as_ptr(),
+            )
+        };
+        fonts.push((kind, dpi, h));
+        h
+    })
+}
+unsafe fn rounded(dc: HDC, r: RECT, color: u32, radius: i32) {
+    let old_brush = SelectObject(dc, GetStockObject(DC_BRUSH));
+    let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    SetDCBrushColor(dc, color);
+    RoundRect(dc, r.left, r.top, r.right, r.bottom, radius, radius);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+}
+unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
+    let id = item.CtlID as usize;
+    let dpi = GetDpiForWindow(item.hwndItem).max(96);
+    let r = item.rcItem;
+    let active = item.itemState & 1 != 0;
+    let color = if id == SAVE {
+        if active {
+            0x497e9d
+        } else {
+            GOLD
+        }
+    } else if active {
+        0x49413a
+    } else {
+        0x332d29
+    };
+    let brush = GetStockObject(DC_BRUSH) as HBRUSH;
+    SetDCBrushColor(item.hDC, if id == REPO || id == EXIT { BG } else { CARD });
+    FillRect(item.hDC, &r, brush);
+    rounded(item.hDC, r, color, 12 * dpi as i32 / 96);
+    let mut label = [0u16; 128];
+    let n = GetWindowTextW(item.hwndItem, label.as_mut_ptr(), 128);
+    let old_font = SelectObject(item.hDC, font(id, dpi));
+    SetBkMode(item.hDC, TRANSPARENT as i32);
+    SetTextColor(item.hDC, if id == SAVE { BG } else { FG });
+    let mut rect = r;
+    if id == AUTO {
+        let on = String::from_utf16_lossy(&label[..n.max(0) as usize]).ends_with("EIN");
+        let sc = |v| v * dpi as i32 / 96;
+        let track = RECT {
+            left: r.right - sc(48),
+            right: r.right - sc(12),
+            top: r.top + sc(10),
+            bottom: r.bottom - sc(10),
+        };
+        rounded(item.hDC, track, if on { GOLD } else { 0x59534d }, sc(16));
+        let x = if on {
+            track.right - sc(14)
+        } else {
+            track.left + sc(2)
+        };
+        rounded(
+            item.hDC,
+            RECT {
+                left: x,
+                right: x + sc(12),
+                top: track.top + sc(2),
+                bottom: track.bottom - sc(2),
+            },
+            if on { BG } else { FG },
+            sc(12),
+        );
+        rect.right -= sc(52);
+    }
+    DrawTextW(
+        item.hDC,
+        label.as_mut_ptr(),
+        n,
+        &mut rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+    );
+    SelectObject(item.hDC, old_font);
+    if item.itemState & 0x10 != 0 {
+        let mut focus = r;
+        InflateRect(&mut focus, -4, -4);
+        DrawFocusRect(item.hDC, &focus);
+    }
+}
+fn open_link(hwnd: HWND, url: &str) {
+    unsafe {
+        if ShellExecuteW(
+            hwnd,
+            wide("open").as_ptr(),
+            wide(url).as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        ) as isize
+            <= 32
+        {
+            alert("Der Browser konnte nicht geöffnet werden.");
+        }
+    }
+}
+fn show_status(ui: &Ui, status: &str) {
+    let (backend, game) = status
+        .split_once("\r\n")
+        .unwrap_or((status, "Spielstatus wird geprüft …"));
+    text(
+        ui.status,
+        backend.strip_prefix("Backend: ").unwrap_or(backend),
+    );
+    text(ui.game, game);
+    unsafe {
+        InvalidateRect(ui.status, null(), 1);
+        InvalidateRect(ui.game, null(), 1);
+    }
+}
+
 fn refresh_auto(ui: &Ui) {
     text(
         ui.auto,
         match auto_enabled() {
-            Ok(true) => "Autostart deaktivieren",
-            Ok(false) => "Autostart aktivieren",
+            Ok(true) => "Mit Windows starten · EIN",
+            Ok(false) => "Mit Windows starten · AUS",
             Err(()) => "Autostart prüfen / aktivieren",
         },
     );
 }
+fn change_key(ui: &mut Ui, key: Option<Zeroizing<String>>) -> Result<(), ()> {
+    let configured = key.is_some();
+    ui.generation = ui.generation.checked_add(1).ok_or(())?;
+    let next = if configured {
+        "Verbindung wird hergestellt …"
+    } else {
+        "Nicht eingerichtet"
+    };
+    let status = format!("{next}\r\nSpielstatus wird geprüft …");
+    if let Ok(mut shared) = ui.shared.lock() {
+        *shared = (ui.generation, status.clone());
+    }
+    show_status(ui, &status);
+    ui.last = String::new();
+    ui.tx.send(Command::Key(ui.generation, key)).map_err(|_| ())
+}
 fn click(hwnd: HWND, id: usize) {
+    if id == DASH || id == REPO {
+        open_link(hwnd, if id == DASH { DASH_URL } else { REPO_URL });
+        return;
+    }
     if id == EXIT {
         unsafe {
             DestroyWindow(hwnd);
@@ -334,13 +562,14 @@ fn click(hwnd: HWND, id: usize) {
                     save_key(&key).map_err(|_| {
                         "Speichern im Windows-Anmeldeinformationsmanager fehlgeschlagen."
                     })?;
-                    ui.tx
-                        .send(Command::Key(Some(key)))
+                    change_key(ui, Some(key))
                         .map_err(|_| "Hintergrundbetrieb beendet. Bitte neu starten.")?;
                     Ok(())
                 });
                 if result.is_ok() {
                     text(ui.saved, "Schlüssel: geschützt gespeichert");
+                    text(ui.save, "Speichern");
+                    text(ui.status, "Verbindung wird hergestellt …");
                 }
                 text(
                     ui.notice,
@@ -351,11 +580,13 @@ fn click(hwnd: HWND, id: usize) {
             }
             FORGET => {
                 text(ui.edit, "");
-                if forget_key().is_ok() && ui.tx.send(Command::Key(None)).is_ok() {
+                if forget_key().is_ok() && change_key(ui, None).is_ok() {
                     text(ui.saved, "Schlüssel: nicht gespeichert");
+                    text(ui.save, "Verbinden");
+                    text(ui.status, "Nicht eingerichtet");
                     text(
                         ui.notice,
-                        "Verbindungsschlüssel entfernt. Übertragung gestoppt.",
+                        "Verbindungsschlüssel entfernt. Hintergrundbetrieb wird aktualisiert.",
                     );
                 } else {
                     text(
@@ -384,6 +615,106 @@ fn click(hwnd: HWND, id: usize) {
 }
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
+        WM_PAINT => {
+            let mut ps: PAINTSTRUCT = zeroed();
+            let dc = BeginPaint(hwnd, &mut ps);
+            let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+            let mut r: RECT = zeroed();
+            GetClientRect(hwnd, &mut r);
+            SetDCBrushColor(dc, BG);
+            FillRect(dc, &r, GetStockObject(DC_BRUSH) as HBRUSH);
+            for (x, y, w, h) in [
+                (24, 86, 286, 132),
+                (322, 86, 286, 132),
+                (24, 234, 584, 210),
+                (24, 460, 584, 102),
+            ] {
+                let rect = RECT {
+                    left: x * dpi / 96,
+                    top: y * dpi / 96,
+                    right: (x + w) * dpi / 96,
+                    bottom: (y + h) * dpi / 96,
+                };
+                rounded(dc, rect, CARD, 18 * dpi / 96);
+            }
+            let icon = LoadIconW(GetModuleHandleW(null()), wide("COLLECTOR").as_ptr());
+            if !icon.is_null() {
+                DrawIconEx(
+                    dc,
+                    24 * dpi / 96,
+                    22 * dpi / 96,
+                    icon,
+                    42 * dpi / 96,
+                    42 * dpi / 96,
+                    0,
+                    null_mut(),
+                    DI_NORMAL,
+                );
+            }
+            EndPaint(hwnd, &ps);
+            0
+        }
+        WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
+            let dc = w as HDC;
+            let child = l as HWND;
+            let id = GetDlgCtrlID(child) as usize;
+            let bg = if msg == WM_CTLCOLOREDIT {
+                FIELD
+            } else if id == HEADING || id == FOOT {
+                BG
+            } else {
+                CARD
+            };
+            let fg = if id == BACKEND || id == GAME {
+                let mut buf = [0u16; 256];
+                let len = GetWindowTextW(child, buf.as_mut_ptr(), 256);
+                let label = String::from_utf16_lossy(&buf[..len.max(0) as usize]);
+                if label.contains("Verbunden ·") || label.contains("Live-Daten werden") {
+                    GREEN
+                } else if label.contains("Ungültig")
+                    || label.contains("nicht erreichbar")
+                    || label.contains("fehlgeschlagen")
+                {
+                    RED
+                } else {
+                    GOLD
+                }
+            } else if id == FOOT {
+                MUTED
+            } else {
+                FG
+            };
+            SetBkColor(dc, bg);
+            SetTextColor(dc, fg);
+            SetDCBrushColor(dc, bg);
+            GetStockObject(DC_BRUSH) as LRESULT
+        }
+        WM_DRAWITEM if l != 0 => {
+            draw_button(&*(l as *const DRAWITEMSTRUCT));
+            1
+        }
+        WM_DPICHANGED => {
+            let dpi = (w & 0xffff) as u32;
+            let r = &*(l as *const RECT);
+            SetWindowPos(
+                hwnd,
+                null_mut(),
+                r.left,
+                r.top,
+                r.right - r.left,
+                r.bottom - r.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            LAYOUT.with(|items| {
+                for &(child, (x, y, cw, ch), id) in items.borrow().iter() {
+                    let sc = |v| v * dpi as i32 / 96;
+                    MoveWindow(child, sc(x), sc(y), sc(cw), sc(ch), 1);
+                    SendMessageW(child, WM_SETFONT, font(id, dpi) as usize, 1);
+                }
+            });
+            InvalidateRect(hwnd, null(), 1);
+            0
+        }
         WM_COMMAND if (w >> 16) & 0xffff == 0 => {
             click(hwnd, w & 0xffff);
             0
@@ -428,10 +759,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                     let status = ui
                         .shared
                         .lock()
-                        .map(|s| s.clone())
+                        .map(|s| s.1.clone())
                         .unwrap_or_else(|_| "Hintergrundfehler.".into());
                     if status != ui.last {
-                        text(ui.status, &status);
+                        show_status(ui, &status);
                         copy_tip(&mut ui.tray, &status);
                         ui.tray.uFlags = NIF_TIP;
                         if Shell_NotifyIconW(NIM_MODIFY, &ui.tray) == 0 {
@@ -462,8 +793,33 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                             SHOW,
                             wide("Status und Einstellungen").as_ptr(),
                         );
+                        UI.with(|cell| {
+                            if let Some(ui) = cell.borrow().as_ref() {
+                                for line in ui.last.lines().take(2) {
+                                    AppendMenuW(
+                                        menu,
+                                        MF_STRING | MF_GRAYED,
+                                        0,
+                                        wide(line).as_ptr(),
+                                    );
+                                }
+                            }
+                        });
                         AppendMenuW(menu, MF_SEPARATOR, 0, null());
-                        AppendMenuW(menu, MF_STRING, EXIT, wide("Beenden").as_ptr());
+                        AppendMenuW(menu, MF_STRING, DASH, wide("Dashboard öffnen").as_ptr());
+                        AppendMenuW(
+                            menu,
+                            MF_STRING
+                                | if auto_enabled() == Ok(true) {
+                                    MF_CHECKED
+                                } else {
+                                    0
+                                },
+                            AUTO,
+                            wide("Mit Windows starten").as_ptr(),
+                        );
+                        AppendMenuW(menu, MF_SEPARATOR, 0, null());
+                        AppendMenuW(menu, MF_STRING, EXIT, wide("Collector beenden").as_ptr());
                         let mut pos: POINT = zeroed();
                         GetCursorPos(&mut pos);
                         SetForegroundWindow(hwnd);
@@ -544,16 +900,22 @@ pub fn run_windows() {
     }
 }
 unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     let class = wide(ID);
     let instance = GetModuleHandleW(null());
-    let icon = LoadIconW(null_mut(), IDI_APPLICATION);
+    let icon = LoadIconW(instance, wide("COLLECTOR").as_ptr());
+    let icon = if icon.is_null() {
+        LoadIconW(null_mut(), IDI_APPLICATION)
+    } else {
+        icon
+    };
     let mut wc: WNDCLASSW = zeroed();
     wc.lpfnWndProc = Some(wndproc);
     wc.hInstance = instance;
     wc.lpszClassName = class.as_ptr();
     wc.hIcon = icon;
     wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
-    wc.hbrBackground = (COLOR_WINDOW + 1) as HBRUSH;
+    wc.hbrBackground = null_mut();
     if RegisterClassW(&wc) == 0 {
         return Err("Fensterklasse konnte nicht eingerichtet werden.");
     }
@@ -561,7 +923,7 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         0,
         class.as_ptr(),
         wide(TITLE).as_ptr(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         620,
@@ -574,64 +936,77 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     if hwnd.is_null() {
         return Err("Statusfenster konnte nicht erstellt werden.");
     }
+    let dpi = GetDpiForWindow(hwnd).max(96);
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 632 * dpi as i32 / 96,
+        bottom: 622 * dpi as i32 / 96,
+    };
+    AdjustWindowRectExForDpi(
+        &mut rect,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
+        0,
+        0,
+        dpi,
+    );
+    SetWindowPos(
+        hwnd,
+        null_mut(),
+        0,
+        0,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    let dark: i32 = 1;
+    windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+        hwnd,
+        20,
+        (&dark as *const i32).cast(),
+        4,
+    );
     let heading = control(
         hwnd,
         "STATIC",
         "Deadlock Live Collector",
         0,
-        0,
-        (24, 18, 560, 30),
+        HEADING,
+        (82, 20, 520, 37),
     );
-    let title_font = CreateFontW(
-        -23,
-        0,
-        0,
-        0,
-        FW_SEMIBOLD as i32,
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET as u32,
-        OUT_DEFAULT_PRECIS as u32,
-        CLIP_DEFAULT_PRECIS as u32,
-        DEFAULT_QUALITY as u32,
-        DEFAULT_PITCH as u32,
-        wide("Segoe UI").as_ptr(),
-    );
-    if !title_font.is_null() {
-        SendMessageW(heading, WM_SETFONT, title_font as usize, 1);
-    }
-    let _ = control(
+    let _version = control(
         hwnd,
         "STATIC",
-        "Windows-App für deinen Twitch-Kanal",
+        concat!("Version ", env!("CARGO_PKG_VERSION"), "  ·  Windows x64"),
         0,
-        0,
-        (24, 51, 560, 22),
+        FOOT,
+        (84, 57, 500, 22),
     );
-    let _ = control(
-        hwnd,
-        "BUTTON",
-        "Verbindungsstatus",
-        BS_GROUPBOX as u32,
-        0,
-        (20, 80, 570, 91),
-    );
+    let _ = control(hwnd, "STATIC", "BACKEND", 0, 0, (40, 100, 250, 22));
+    let _ = control(hwnd, "STATIC", "DEADLOCK", 0, 0, (338, 100, 250, 22));
     let status = control(
         hwnd,
         "STATIC",
-        "Collector wird gestartet …",
+        "Verbindung wird hergestellt …",
         0,
+        BACKEND,
+        (40, 129, 254, 78),
+    );
+    let game = control(
+        hwnd,
+        "STATIC",
+        "Spielstatus wird geprüft …",
         0,
-        (35, 102, 540, 58),
+        GAME,
+        (338, 129, 254, 78),
     );
     let _ = control(
         hwnd,
-        "BUTTON",
-        "Verbindungsschlüssel",
-        BS_GROUPBOX as u32,
+        "STATIC",
+        "VERBINDUNGSSCHLÜSSEL",
         0,
-        (20, 181, 570, 163),
+        0,
+        (40, 248, 540, 23),
     );
     let saved = control(
         hwnd,
@@ -639,68 +1014,54 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         "Schlüssel wird geprüft …",
         0,
         0,
-        (35, 201, 540, 21),
-    );
-    let _ = control(
-        hwnd,
-        "STATIC",
-        "Im Streamer-Dashboard: Tools → Live Collector. Nicht in OBS einfügen.",
-        0,
-        0,
-        (35, 225, 540, 26),
+        (40, 275, 540, 22),
     );
     let edit = control(
         hwnd,
         "EDIT",
         "",
-        ES_PASSWORD as u32 | ES_AUTOHSCROLL as u32 | WS_BORDER | WS_TABSTOP,
-        0,
-        (35, 253, 540, 26),
+        ES_PASSWORD as u32 | ES_AUTOHSCROLL as u32 | WS_TABSTOP,
+        EDIT,
+        (40, 305, 552, 29),
     );
     SendMessageW(edit, EM_SETLIMITTEXT, 128, 0);
-    let save = control(
-        hwnd,
-        "BUTTON",
-        "Schlüssel speichern",
-        WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
-        SAVE,
-        (35, 293, 260, 32),
-    );
-    let forget = control(
-        hwnd,
-        "BUTTON",
-        "Schlüssel entfernen",
-        WS_TABSTOP,
-        FORGET,
-        (305, 293, 270, 32),
-    );
-    let notice = control(hwnd, "STATIC", "", 0, 0, (24, 351, 565, 43));
+    SendMessageW(edit, 0x00d3, 3, (10 | (10 << 16)) as isize); // EM_SETMARGINS
+    let button = |label, id, bounds| {
+        control(
+            hwnd,
+            "BUTTON",
+            label,
+            WS_TABSTOP | BS_OWNERDRAW as u32,
+            id,
+            bounds,
+        )
+    };
+    let save = button("Verbinden", SAVE, (40, 347, 170, 36));
+    let forget = button("Schlüssel entfernen", FORGET, (220, 347, 174, 36));
+    let dashboard = button("Dashboard öffnen", DASH, (404, 347, 188, 36));
+    let notice = control(hwnd, "STATIC", "", 0, 0, (40, 394, 552, 44));
+    let _ = control(hwnd, "STATIC", "EINSTELLUNGEN", 0, 0, (40, 474, 540, 22));
+    let auto = button("Mit Windows starten · AUS", AUTO, (40, 502, 246, 36));
     let _ = control(
         hwnd,
         "STATIC",
-        "Schließen (X) blendet das Fenster in den Infobereich aus.",
+        "Schließen (X) minimiert in den Infobereich. Der Collector läuft weiter.",
         0,
         0,
-        (24, 397, 565, 22),
+        (302, 503, 290, 52),
     );
-    let auto = control(
+    let repo = button("GitHub  ↗", REPO, (24, 577, 145, 30));
+    let _ = control(
         hwnd,
-        "BUTTON",
-        "Autostart",
-        WS_TABSTOP,
-        AUTO,
-        (24, 428, 270, 32),
+        "STATIC",
+        concat!("Build ", env!("CARGO_PKG_VERSION"), " · x64"),
+        0,
+        FOOT,
+        (184, 581, 240, 22),
     );
-    let exit = control(
-        hwnd,
-        "BUTTON",
-        "Beenden",
-        WS_TABSTOP,
-        EXIT,
-        (309, 428, 270, 32),
-    );
+    let exit = button("Collector beenden", EXIT, (434, 577, 174, 30));
     if [
-        status, edit, save, forget, auto, exit, notice, saved, heading,
+        heading, status, game, edit, save, forget, dashboard, auto, exit, notice, saved, repo,
     ]
     .iter()
     .any(|p| p.is_null())
@@ -720,6 +1081,11 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         ),
     };
     let configured = key.is_some();
+    if configured {
+        text(save, "Speichern");
+    } else {
+        text(status, "Nicht eingerichtet");
+    }
     text(notice, notice_text);
     text(
         saved,
@@ -729,7 +1095,14 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
             "Schlüssel: nicht gespeichert"
         },
     );
-    let shared = Arc::new(Mutex::new("Backend: wird geprüft …".into()));
+    let shared = Arc::new(Mutex::new((
+        0,
+        if configured {
+            "Verbindung wird hergestellt …".into()
+        } else {
+            "Nicht eingerichtet".into()
+        },
+    )));
     let (tx, rx) = mpsc::channel();
     let worker_status = shared.clone();
     let mut tray: NOTIFYICONDATAW = zeroed();
@@ -747,12 +1120,15 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     let ui = Ui {
         edit,
         status,
+        game,
+        save,
         notice,
         saved,
         auto,
         tx,
         shared,
         last: String::new(),
+        generation: 0,
         tray,
         taskbar: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
         tray_available: true,
@@ -767,7 +1143,7 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         .is_err()
         {
             if let Ok(mut status) = failure_status.lock() {
-                *status =
+                status.1 =
                     "Hintergrundbetrieb unerwartet beendet. Bitte Collector neu starten.".into();
             }
         }
@@ -791,8 +1167,13 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         }
     });
     let _ = handle.join();
-    if !title_font.is_null() {
-        DeleteObject(title_font as HGDIOBJ);
-    }
+    FONTS.with(|fonts| {
+        for (_, _, h) in fonts.borrow_mut().drain(..) {
+            if !h.is_null() {
+                DeleteObject(h);
+            }
+        }
+    });
+    LAYOUT.with(|items| items.borrow_mut().clear());
     Ok(())
 }
