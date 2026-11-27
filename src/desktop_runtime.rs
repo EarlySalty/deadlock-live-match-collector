@@ -48,6 +48,7 @@ impl Runtime {
             return;
         }
         self.token = token;
+        self.status = "Spielstatus wird neu geprüft.".into();
         self.client = None;
         self.source = None;
         self.writer = Writer::new();

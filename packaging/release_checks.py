@@ -116,6 +116,21 @@ def require_tag(tag, sha, ref, version, remote_refs):
         raise ValueError("Remote tag does not resolve to the dispatched main commit")
 
 
+def check_main():
+    sha = os.environ["GITHUB_SHA"]
+    if os.environ["GITHUB_REF"] != "refs/heads/main" or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Release workflow must run from main")
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    remote = subprocess.check_output(["git", "ls-remote", "origin", "refs/heads/main"], text=True).strip()
+    if head != sha or remote != f"{sha}\trefs/heads/main":
+        raise ValueError("Checkout or remote main changed")
+    metadata = command_json("cargo", "metadata", "--locked", "--no-deps", "--format-version", "1")
+    version, = [p["version"] for p in metadata["packages"] if p["name"] == "live-match-collector"]
+    if os.environ["RELEASE_TAG"] != f"v{version}":
+        raise ValueError("Tag does not match package version")
+    print(f"Exact main checkout and version verified: {sha}, v{version}")
+
+
 def check_tag():
     tag = os.environ["RELEASE_TAG"]
     sha = os.environ["GITHUB_SHA"]
@@ -143,6 +158,8 @@ def main():
             preflight()
         elif mode == "ci":
             require_ci(os.environ["GITHUB_SHA"], os.environ["GITHUB_REPOSITORY"])
+        elif mode == "main":
+            check_main()
         elif mode == "tag":
             check_tag()
         else:

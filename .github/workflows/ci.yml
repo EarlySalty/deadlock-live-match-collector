@@ -190,13 +190,28 @@ jobs:
             dist/reproducibility.txt
             dist/pe-evidence.txt
             dist/clamav-report.txt
+  native-render:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Locate Windows SDK resource compiler
+        shell: pwsh
+        run: |
+          $rc = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\rc.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $rc) { throw "Windows SDK rc.exe missing" }
+          $rc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Exercise native Direct2D and DirectWrite pixel rendering
+        run: cargo test --locked --lib --target x86_64-pc-windows-msvc windows_vector::tests
   build:
     if: always()
-    needs: [rust, packaging, dependency, audit, secrets, workflow-lint, windows]
+    needs: [rust, packaging, dependency, audit, secrets, workflow-lint, windows, native-render]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every independent check
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
-          jq -e 'length == 7 and all(.[]; .result == "success")' <<< "$RESULTS"
+          jq -e 'length == 8 and all(.[]; .result == "success")' <<< "$RESULTS"

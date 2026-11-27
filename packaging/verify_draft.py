@@ -27,10 +27,10 @@ def expected_assets(archive, dist=Path("dist")):
     return expected
 
 
-def verify_draft(release, assets, tag, expected, prerelease):
+def verify_draft(release, assets, tag, expected, prerelease, draft=True):
     release_id = release.get("id")
     if (type(release_id) is not int or release_id <= 0
-            or release.get("tag_name") != tag or release.get("draft") is not True
+            or release.get("tag_name") != tag or release.get("draft") is not draft
             or release.get("prerelease") is not prerelease):
         raise ValueError("Unexpected release identity or mode")
     if not isinstance(assets, list) or len(assets) != len(expected):
@@ -50,7 +50,11 @@ def verify_draft(release, assets, tag, expected, prerelease):
 
 
 def main():
-    archive, = sys.argv[1:]
+    args = sys.argv[1:]
+    archive = args[0]
+    published = len(args) == 3 and args[1] == "--published" and bool(re.fullmatch(r"[1-9][0-9]*", args[2]))
+    if len(args) != 1 and not published:
+        raise ValueError("invalid release verification arguments")
     repo, tag, mode = (os.environ[k] for k in ("GITHUB_REPOSITORY", "RELEASE_TAG", "RELEASE_MODE"))
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) or mode not in ("stable", "prerelease"):
         raise ValueError("Invalid release coordinates")
@@ -64,12 +68,12 @@ def main():
         raise ValueError("Missing or ambiguous release")
     release = matches[0]
     release_id = release.get("id")
-    if type(release_id) is not int or release_id <= 0:
+    if type(release_id) is not int or release_id <= 0 or (published and release_id != int(args[2])):
         raise ValueError("Invalid release ID")
     pages = json.loads(subprocess.check_output(
         ["gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases/{release_id}/assets?per_page=100"], text=True))
     assets = [a for page in pages for a in page]
-    print(verify_draft(release, assets, tag, expected, mode == "prerelease"))
+    print(verify_draft(release, assets, tag, expected, mode == "prerelease", draft=not published))
 
 
 if __name__ == "__main__":

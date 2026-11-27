@@ -7,12 +7,24 @@ pub mod game_source;
 #[cfg(test)]
 mod hud_source;
 pub mod independent_source;
+#[cfg(any(test, all(windows, not(feature = "internal-test"))))]
+mod install_policy;
 pub mod limits;
 #[cfg(test)]
 mod model_wire_tests;
 mod secret;
+#[cfg(any(windows, test))]
+mod update_check;
+#[cfg(any(windows, test))]
+mod window_layout;
 #[cfg(windows)]
 mod windows_client;
+#[cfg(all(windows, not(feature = "internal-test")))]
+mod windows_install;
+#[cfg(windows)]
+mod windows_paint;
+#[cfg(windows)]
+mod windows_vector;
 #[cfg(windows)]
 pub use windows_client::run_windows;
 pub mod telemetry;
