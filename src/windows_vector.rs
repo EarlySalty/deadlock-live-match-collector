@@ -116,16 +116,21 @@ impl VectorFrame {
                 target.SetDpi(96., 96.);
                 target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-                // Flat pixel geometry and zero ClearType level prevent RGB fringes.
-                if let Ok(params) = f.write.CreateCustomRenderingParams(
-                    2.2,
-                    0.5,
-                    0.,
-                    DWRITE_PIXEL_GEOMETRY_FLAT,
-                    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
-                ) {
-                    target.SetTextRenderingParams(&params);
-                }
+                // Use grid-fitted glyphs, not symmetric Y-axis smoothing.
+                // The latter softens small UI labels on a 96-DPI display.
+                // Explicit grayscale avoids the RGB fringes reported in 0.2.6.
+                let params = f
+                    .write
+                    .CreateCustomRenderingParams(
+                        2.2,
+                        1.25,
+                        0.,
+                        DWRITE_PIXEL_GEOMETRY_FLAT,
+                        DWRITE_RENDERING_MODE_GDI_NATURAL,
+                    )
+                    .ok()?;
+                target.SetTextRenderingParams(&params);
+                target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
                 target.BeginDraw();
                 Some(Self {
                     target,
@@ -215,8 +220,15 @@ impl VectorFrame {
                 },
                 &sign,
             )?;
-            self.write
-                .CreateTextLayout(label, &format, w.max(1.), h.max(1.))
+            self.write.CreateGdiCompatibleTextLayout(
+                label,
+                &format,
+                w.max(1.),
+                h.max(1.),
+                1.,
+                None,
+                true,
+            )
         }
     }
     pub(super) fn text_width(&self, label: &[u16], size: i32, weight: i32) -> Option<i32> {
@@ -528,6 +540,74 @@ impl Drop for VectorFrame {
             unsafe {
                 let _ = self.target.EndDraw(None, None);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Graphics::Gdi::*;
+
+    #[test]
+    fn primary_renderer_draws_neutral_readable_text_at_native_pixel_sizes() {
+        // Offscreen 32-bit DIB: no desktop capture, user data or credentials.
+        // Run on real Windows to exercise BindDC, DirectWrite and EndDraw.
+        unsafe {
+            let dc = CreateCompatibleDC(null_mut());
+            assert!(!dc.is_null());
+            let mut info: BITMAPINFO = zeroed();
+            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = 768;
+            info.bmiHeader.biHeight = -180;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            let mut bits = null_mut();
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+            assert!(!bitmap.is_null() && !bits.is_null());
+            let old = SelectObject(dc, bitmap);
+            assert!(!old.is_null() && old as isize != -1);
+            let r = RECT {
+                left: 0,
+                top: 0,
+                right: 768,
+                bottom: 180,
+            };
+            let label: Vec<u16> = "Deadlock Live Collector · Verbindung"
+                .encode_utf16()
+                .collect();
+            for dpi in [96, 144, 192] {
+                let frame = VectorFrame::begin(dc, r)
+                    .expect("Direct2D/DirectWrite must initialize without fallback");
+                frame.fill(r, 0x303030);
+                let size = crate::window_layout::scale(15, dpi);
+                let width = frame.text_width(&label, size, 500).expect("measure");
+                assert!(width > size * 6 && width < r.right);
+                frame.text(&label, r, 0xf5f5f5, size, 500, (false, false));
+                assert!(frame.finish(), "native frame failed at {dpi} DPI");
+                GdiFlush();
+                let data = std::slice::from_raw_parts(bits.cast::<u8>(), 768 * 180 * 4);
+                let mut bright = 0;
+                let mut intermediate = 0;
+                for px in data.as_chunks::<4>().0 {
+                    let lo = px[0].min(px[1]).min(px[2]);
+                    let hi = px[0].max(px[1]).max(px[2]);
+                    assert!(hi - lo <= 2, "unexpected colored subpixel fringe");
+                    if lo >= 200 {
+                        bright += 1;
+                    }
+                    if lo > 60 && hi < 200 {
+                        intermediate += 1;
+                    }
+                }
+                assert!(bright > 30, "missing bright text pixels at {dpi} DPI");
+                assert!(intermediate > 10, "missing antialiasing at {dpi} DPI");
+            }
+            SelectObject(dc, old);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
         }
     }
 }

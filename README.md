@@ -80,3 +80,7 @@ Native GDI/ClearType-Schrift statt GDI+-Schriftrasterung; GDI+ zeichnet nur Form
 Direct2D und DirectWrite zeichnen die UI mit Graustufen-Antialiasing direkt in den physikalischen Pixelabmessungen des Fensters, ohne ClearType-Farbsäume. Die Fensterkomposition bleibt gepuffert; pro Zeichenfläche wird ein vollständiger Frame gerendert. GDI+/GDI bleiben ausschließlich als Fallback. Das Per-Monitor-V2-Manifest verhindert DPI-Bitmapvirtualisierung. Das Original-Community-PNG (192×192) wird für gängige DPI-Stufen mit Lanczos vorgefiltert, nicht aus einem kleinen ICO vergrößert. Statuspunkte entfallen; Statusmeldungen bleiben. Der Marken-Header integriert die Fenstersteuerung, die Fußzeile fasst Version und Aktionen zusammen. Die vorhandene Win32-Installation, native Passwortmaske und Hintergrundfunktion bleiben unverändert. Zusätzliche Microsoft-Windows-API-Bindings (Cargo windows 0.48) benötigen keine externen GUI-Laufzeiten.
 
 Logo-Rastervarianten können mit `python3 packaging/generate_logo_pixels.py` aus der bestehenden PNG-Datei und ImageMagick neu erzeugt werden.
+
+### Nachtgold 0.2.8
+
+Hellerer neutraler Graphit-Hintergrund, abgestufte Status-/Funktionskarten, kontrastreichere Sekundärtexte und integrierte Fußzeile. DirectWrite nutzt GDI-kompatibles, pixelgerastertes natürliches Layout mit horizontaler Graustufenglättung und erhöhtem Glyphenkontrast anstelle symmetrischer vertikaler Glättung. Native Vektoricons, DPI-Manifest, Pufferung, Logo und geschützte Funktionen bleiben erhalten.

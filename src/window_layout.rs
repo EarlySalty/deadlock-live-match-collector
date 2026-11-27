@@ -7,6 +7,7 @@ pub(crate) const HEADER_TOP: i32 = 16;
 pub(crate) const HEADER_BOTTOM: i32 = 102;
 pub(crate) const EDIT_BOUNDS: Bounds = (40, 330, 552, 42);
 pub(crate) const AUTO_BOUNDS: Bounds = (536, 509, 56, 38);
+#[cfg(test)]
 pub(crate) const FOOT_BOUNDS: Bounds = (24, 590, 584, 42);
 pub(crate) const CARDS: [Bounds; 4] = [
     (24, 130, 286, 118),
@@ -122,7 +123,7 @@ mod tests {
             }
             assert!(contains((0, 0, CLIENT_W, CAPTION_H), (572, 16, 36, 32)));
             assert!(contains((0, 0, CLIENT_W, CLIENT_H), FOOT_BOUNDS));
-            for control in [(40, 596, 274, 30), (366, 596, 110, 30), (488, 596, 104, 30)] {
+            for control in [(24, 596, 290, 30), (366, 596, 110, 30), (488, 596, 120, 30)] {
                 assert!(contains(FOOT_BOUNDS, control));
             }
             assert!(contains((0, 0, 532, CAPTION_H), (104, 26, 416, 40)));
