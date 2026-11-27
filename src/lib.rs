@@ -11,6 +11,8 @@ pub mod limits;
 #[cfg(test)]
 mod model_wire_tests;
 mod secret;
+#[cfg(any(windows, test))]
+mod window_layout;
 #[cfg(windows)]
 mod windows_client;
 #[cfg(windows)]

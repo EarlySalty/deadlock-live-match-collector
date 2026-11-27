@@ -3,6 +3,7 @@ use crate::{
     desktop_runtime::{ConnectionProbe, Runtime, IDLE},
     independent_source::open_source,
     secret,
+    window_layout::{centered, ink_baseline, scale},
 };
 use std::{
     cell::RefCell,
@@ -19,7 +20,7 @@ use windows_sys::Win32::{
     Security::Credentials::*,
     System::{Diagnostics::ToolHelp::*, LibraryLoader::*, Registry::*, Threading::*},
     UI::{
-        Controls::{DRAWITEMSTRUCT, EM_SETLIMITTEXT},
+        Controls::{DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS},
         HiDpi::*,
         Shell::*,
         WindowsAndMessaging::*,
@@ -310,19 +311,18 @@ fn control(
     id: usize,
     bounds: (i32, i32, i32, i32),
 ) -> HWND {
-    let (x, y, w, h) = bounds;
     unsafe {
         let dpi = GetDpiForWindow(parent).max(96);
-        let scale = |v: i32| v * dpi as i32 / 96;
+        let r = scaled_rect(bounds, dpi);
         let hwnd = CreateWindowExW(
             0,
             wide(class).as_ptr(),
             wide(caption).as_ptr(),
             WS_CHILD | WS_VISIBLE | style,
-            scale(x),
-            scale(y),
-            scale(w),
-            scale(h),
+            r.left,
+            r.top,
+            r.right - r.left,
+            r.bottom - r.top,
             parent,
             id as HMENU,
             GetModuleHandleW(null()),
@@ -330,7 +330,7 @@ fn control(
         );
         if !hwnd.is_null() {
             LAYOUT.with(|items| items.borrow_mut().push((hwnd, bounds, id)));
-            SendMessageW(hwnd, WM_SETFONT, font(id, dpi) as usize, 1);
+            apply_control_layout(hwnd, bounds, id, dpi);
         }
         hwnd
     }
@@ -348,6 +348,11 @@ const BACKEND: usize = 202;
 const GAME: usize = 203;
 const FOOT: usize = 204;
 const EDIT: usize = 205;
+const EDIT_BOUNDS: (i32, i32, i32, i32) = (40, 305, 552, 29);
+// Win32 STATIC style (not exported by windows-sys 0.61).
+const SS_CENTERIMAGE: u32 = 0x0200;
+const HEADER_TOP: i32 = 20;
+const HEADER_BOTTOM: i32 = 76;
 type LayoutItem = (HWND, (i32, i32, i32, i32), usize);
 thread_local! {
     static LAYOUT: RefCell<Vec<LayoutItem>> = const { RefCell::new(Vec::new()) };
@@ -368,7 +373,7 @@ fn font(id: usize, dpi: u32) -> HFONT {
         }
         let h = unsafe {
             CreateFontW(
-                -([15, 26, 17][kind] * dpi as i32 / 96),
+                -scale([15, 26, 17][kind], dpi),
                 0,
                 0,
                 0,
@@ -392,6 +397,85 @@ fn font(id: usize, dpi: u32) -> HFONT {
         h
     })
 }
+fn scaled_rect((x, y, w, h): (i32, i32, i32, i32), dpi: u32) -> RECT {
+    RECT {
+        left: scale(x, dpi),
+        top: scale(y, dpi),
+        right: scale(x + w, dpi),
+        bottom: scale(y + h, dpi),
+    }
+}
+
+unsafe fn apply_control_layout(child: HWND, bounds: (i32, i32, i32, i32), id: usize, dpi: u32) {
+    let hfont = font(id, dpi);
+    SendMessageW(child, WM_SETFONT, hfont as usize, 1);
+    let mut r = scaled_rect(bounds, dpi);
+    if id == EDIT {
+        // Single-line EDIT ignores EM_SETRECT. Center its native text line inside
+        // the painted field instead; preserve password masking and edit semantics.
+        let dc = GetDC(child);
+        if !dc.is_null() {
+            let old = SelectObject(dc, hfont);
+            let mut metrics: TEXTMETRICW = zeroed();
+            if GetTextMetricsW(dc, &mut metrics) != 0 {
+                let height = (metrics.tmHeight + scale(2, dpi)).min(r.bottom - r.top);
+                (r.top, r.bottom) = centered(r.top, r.bottom, height);
+            }
+            SelectObject(dc, old);
+            ReleaseDC(child, dc);
+        }
+        r.left += scale(4, dpi);
+        r.right -= scale(4, dpi);
+        let margin = scale(6, dpi) as isize;
+        SendMessageW(child, EM_SETMARGINS, 3, margin | (margin << 16));
+    }
+    MoveWindow(child, r.left, r.top, r.right - r.left, r.bottom - r.top, 1);
+}
+
+/// Measure the visible glyph bounds of the actual label with the selected font.
+/// A common ink center avoids a text-line-box/track mismatch across DPI settings.
+unsafe fn center_button_label(dc: HDC, label: &[u16], r: &mut RECT) -> u32 {
+    let flags = DT_CENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS;
+    let mut tm: TEXTMETRICW = zeroed();
+    if GetTextMetricsW(dc, &mut tm) == 0 {
+        return flags | DT_VCENTER;
+    }
+    let one = FIXED { fract: 0, value: 1 };
+    let zero = FIXED { fract: 0, value: 0 };
+    let matrix = MAT2 {
+        eM11: one,
+        eM12: zero,
+        eM21: zero,
+        eM22: one,
+    };
+    let mut above = 0;
+    let mut below = 0;
+    for &ch in label {
+        let mut glyph: GLYPHMETRICS = zeroed();
+        if GetGlyphOutlineW(
+            dc,
+            ch as u32,
+            GGO_METRICS,
+            &mut glyph,
+            0,
+            null_mut(),
+            &matrix,
+        ) != GDI_ERROR as u32
+            && glyph.gmBlackBoxY != 0
+        {
+            above = above.max(glyph.gmptGlyphOrigin.y);
+            below = below.max(glyph.gmBlackBoxY as i32 - glyph.gmptGlyphOrigin.y);
+        }
+    }
+    if above == 0 {
+        above = (tm.tmAscent - tm.tmInternalLeading).max(1);
+        below = tm.tmDescent;
+    }
+    let baseline = ink_baseline(r.top, r.bottom, above, below);
+    r.top = (baseline - tm.tmAscent).max(r.top);
+    flags
+}
+
 unsafe fn rounded(dc: HDC, r: RECT, color: u32, radius: i32) {
     let old_brush = SelectObject(dc, GetStockObject(DC_BRUSH));
     let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
@@ -428,39 +512,37 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     let mut rect = r;
     if id == AUTO {
         let on = String::from_utf16_lossy(&label[..n.max(0) as usize]).ends_with("EIN");
-        let sc = |v| v * dpi as i32 / 96;
+        let sc = |v| scale(v, dpi);
+        let (top, bottom) = centered(r.top, r.bottom, sc(20));
         let track = RECT {
             left: r.right - sc(48),
             right: r.right - sc(12),
-            top: r.top + sc(10),
-            bottom: r.bottom - sc(10),
+            top,
+            bottom,
         };
-        rounded(item.hDC, track, if on { GOLD } else { 0x59534d }, sc(16));
+        rounded(item.hDC, track, if on { GOLD } else { 0x59534d }, sc(20));
+        let diameter = sc(14);
+        let (thumb_top, thumb_bottom) = centered(r.top, r.bottom, diameter);
         let x = if on {
-            track.right - sc(14)
+            track.right - sc(3) - diameter
         } else {
-            track.left + sc(2)
+            track.left + sc(3)
         };
         rounded(
             item.hDC,
             RECT {
                 left: x,
-                right: x + sc(12),
-                top: track.top + sc(2),
-                bottom: track.bottom - sc(2),
+                right: x + diameter,
+                top: thumb_top,
+                bottom: thumb_bottom,
             },
             if on { BG } else { FG },
-            sc(12),
+            diameter,
         );
         rect.right -= sc(52);
     }
-    DrawTextW(
-        item.hDC,
-        label.as_mut_ptr(),
-        n,
-        &mut rect,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-    );
+    let flags = center_button_label(item.hDC, &label[..n.max(0) as usize], &mut rect);
+    DrawTextW(item.hDC, label.as_mut_ptr(), n, &mut rect, flags);
     SelectObject(item.hDC, old_font);
     if item.itemState & 0x10 != 0 {
         let mut focus = r;
@@ -618,7 +700,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
             let dc = BeginPaint(hwnd, &mut ps);
-            let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+            let dpi = GetDpiForWindow(hwnd).max(96);
             let mut r: RECT = zeroed();
             GetClientRect(hwnd, &mut r);
             SetDCBrushColor(dc, BG);
@@ -629,27 +711,33 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 (24, 234, 584, 210),
                 (24, 460, 584, 102),
             ] {
-                let rect = RECT {
-                    left: x * dpi / 96,
-                    top: y * dpi / 96,
-                    right: (x + w) * dpi / 96,
-                    bottom: (y + h) * dpi / 96,
-                };
-                rounded(dc, rect, CARD, 18 * dpi / 96);
+                rounded(dc, scaled_rect((x, y, w, h), dpi), CARD, scale(18, dpi));
             }
-            let icon = LoadIconW(GetModuleHandleW(null()), wide("COLLECTOR").as_ptr());
+            rounded(dc, scaled_rect(EDIT_BOUNDS, dpi), FIELD, scale(8, dpi));
+            let icon_size = scale(42, dpi);
+            let (icon_top, _) =
+                centered(scale(HEADER_TOP, dpi), scale(HEADER_BOTTOM, dpi), icon_size);
+            let icon = LoadImageW(
+                GetModuleHandleW(null()),
+                wide("COLLECTOR").as_ptr(),
+                IMAGE_ICON,
+                icon_size,
+                icon_size,
+                LR_DEFAULTCOLOR,
+            );
             if !icon.is_null() {
                 DrawIconEx(
                     dc,
-                    24 * dpi / 96,
-                    22 * dpi / 96,
-                    icon,
-                    42 * dpi / 96,
-                    42 * dpi / 96,
+                    scale(24, dpi),
+                    icon_top,
+                    icon as HICON,
+                    icon_size,
+                    icon_size,
                     0,
                     null_mut(),
                     DI_NORMAL,
                 );
+                DestroyIcon(icon as HICON);
             }
             EndPaint(hwnd, &ps);
             0
@@ -706,10 +794,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
             LAYOUT.with(|items| {
-                for &(child, (x, y, cw, ch), id) in items.borrow().iter() {
-                    let sc = |v| v * dpi as i32 / 96;
-                    MoveWindow(child, sc(x), sc(y), sc(cw), sc(ch), 1);
-                    SendMessageW(child, WM_SETFONT, font(id, dpi) as usize, 1);
+                for &(child, bounds, id) in items.borrow().iter() {
+                    apply_control_layout(child, bounds, id, dpi);
                 }
             });
             InvalidateRect(hwnd, null(), 1);
@@ -970,20 +1056,34 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         hwnd,
         "STATIC",
         "Deadlock Live Collector",
-        0,
+        SS_CENTERIMAGE,
         HEADING,
-        (82, 20, 520, 37),
+        (82, HEADER_TOP, 520, 34),
     );
     let _version = control(
         hwnd,
         "STATIC",
-        concat!("Version ", env!("CARGO_PKG_VERSION"), "  ·  Windows x64"),
-        0,
+        concat!("Version ", env!("CARGO_PKG_VERSION"), " · Windows x64"),
+        SS_CENTERIMAGE,
         FOOT,
-        (84, 57, 500, 22),
+        (82, 54, 500, 22),
     );
-    let _ = control(hwnd, "STATIC", "BACKEND", 0, 0, (40, 100, 250, 22));
-    let _ = control(hwnd, "STATIC", "DEADLOCK", 0, 0, (338, 100, 250, 22));
+    let _ = control(
+        hwnd,
+        "STATIC",
+        "BACKEND",
+        SS_CENTERIMAGE,
+        0,
+        (40, 100, 254, 22),
+    );
+    let _ = control(
+        hwnd,
+        "STATIC",
+        "DEADLOCK",
+        SS_CENTERIMAGE,
+        0,
+        (338, 100, 254, 22),
+    );
     let status = control(
         hwnd,
         "STATIC",
@@ -1022,10 +1122,9 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         "",
         ES_PASSWORD as u32 | ES_AUTOHSCROLL as u32 | WS_TABSTOP,
         EDIT,
-        (40, 305, 552, 29),
+        EDIT_BOUNDS,
     );
     SendMessageW(edit, EM_SETLIMITTEXT, 128, 0);
-    SendMessageW(edit, 0x00d3, 3, (10 | (10 << 16)) as isize); // EM_SETMARGINS
     let button = |label, id, bounds| {
         control(
             hwnd,
@@ -1055,9 +1154,9 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         hwnd,
         "STATIC",
         concat!("Build ", env!("CARGO_PKG_VERSION"), " · x64"),
-        0,
+        SS_CENTERIMAGE,
         FOOT,
-        (184, 581, 240, 22),
+        (184, 577, 240, 30),
     );
     let exit = button("Collector beenden", EXIT, (434, 577, 174, 30));
     if [

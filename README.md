@@ -64,3 +64,5 @@ The earlier, different executable (SHA-256 `89e9ec4fda801a50f0fb8714a70b5dea69af
 ### Windows-Oberfläche (0.2.2)
 
 Die Nachtgold-Oberfläche nutzt native Win32-Steuerelemente für maskierte Eingabe und Tastaturnavigation, aber zeichnet Karten, Schaltflächen und Autostart-Umschalter selbst. Per-Monitor-DPI und ein eingebettetes eigenes Symbol benötigen keine zusätzlichen Laufzeitpakete. Die Statuskarten unterscheiden bestätigte HTTPS-Verbindung und lokalen Spielzustand. Dashboard und Repository werden ausschließlich über feste HTTPS-Adressen geöffnet. Schließen blendet das Fenster in den Infobereich aus; 'Collector beenden' stoppt den Hintergrundbetrieb. Windows-10/11-Anzeige, Skalierung und Tray müssen am realen Gerät abgenommen werden.
+
+Version 0.2.3: gezielte optische Feinausrichtung. Schalter, Knopf und sichtbare Schrift teilen eine gemessene Mittelachse; Eingabefeld und Kopfzeile nutzen DPI-skalierte Innenabstände. Das bestehende Collector-Symbol bleibt erhalten.
