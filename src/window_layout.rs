@@ -10,8 +10,7 @@ pub(crate) const AUTO_BOUNDS: Bounds = (536, 509, 56, 38);
 pub(crate) const FOOT_BOUNDS: Bounds = (0, 590, CLIENT_W, CLIENT_H - 590);
 pub(crate) const MINIMIZE_BOUNDS: Bounds = (544, 2, 40, 30);
 pub(crate) const CLOSE_BOUNDS: Bounds = (586, 2, 44, 30);
-pub(crate) const HEADING_BOUNDS: Bounds = (104, 44, 504, 40);
-pub(crate) const BRAND_BOUNDS: Bounds = (106, 86, 502, 24);
+pub(crate) const BRAND_BOUNDS: Bounds = (104, 38, 504, 82);
 pub(crate) const CARDS: [Bounds; 4] = [
     (24, 130, 286, 118),
     (322, 130, 286, 118),
@@ -130,12 +129,14 @@ mod tests {
                 assert!(contains(FOOT_BOUNDS, control));
             }
             assert!(contains((0, 0, CLIENT_W, CAPTION_H), MINIMIZE_BOUNDS));
-            for control in [HEADING_BOUNDS, BRAND_BOUNDS] {
-                assert!(contains(
-                    (0, CAPTION_H, CLIENT_W, CARDS[0].1 - CAPTION_H),
-                    control
-                ));
-            }
+            assert!(contains(
+                (0, CAPTION_H, CLIENT_W, CARDS[0].1 - CAPTION_H),
+                BRAND_BOUNDS
+            ));
+            let logo_center = scale(HEADER_TOP, dpi) + scale(HEADER_BOTTOM, dpi);
+            let brand_center =
+                scale(BRAND_BOUNDS.1, dpi) + scale(BRAND_BOUNDS.1 + BRAND_BOUNDS.3, dpi);
+            assert_eq!(logo_center, brand_center);
         }
     }
 

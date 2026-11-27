@@ -96,3 +96,7 @@ Kompakte abgegrenzte Titelleiste mit Community-Icon, sichtbarer physikalischer 1
 ### Update-Hinweise 0.2.11
 
 Ein separater Netzwerkthread fragt beim Start und alle sechs Stunden die öffentliche GitHub-Release-API ab; manuell über die Versionsanzeige oder das Tray-Menü. Nur veröffentlichte numerische Versionstags mit hochgeladener Windows-EXE aus dem Collector-Repository werden berücksichtigt. Release Notes werden als scrollbar angezeigter Originaltext dargestellt. Der Browser öffnet ausschließlich die validierte GitHub-Release-Seite; kein automatischer Download, keine Ausführung, keine Zugangsdaten. Später bzw. Schließen unterdrückt automatische Hinweise für die Version (HKCU, getrennt nach Kanal); eine manuelle Prüfung zeigt sie erneut. Öffentliche Pre-Releases sind standardmäßig ausgeschlossen; für einen ausdrücklich aktivierten öffentlichen Testkanal kann vor dem Collector-Start die Prozessumgebungsvariable `DEADLOCK_COLLECTOR_PUBLIC_TEST_CHANNEL=1` gesetzt werden. Der private Owner-Release-Kanal wird nicht abgefragt. Netzfehler, leere Listen und Rate-Limits beeinträchtigen den Collector nicht. Die bestehende manuelle Installation einer numerisch neueren EXE bleibt unverändert.
+
+### Header-Finalisierung 0.2.12
+
+Doppelter Produkttitel entfernt: Programmname nur in der Titelleiste, bestehendes Community-Logo mit vertikal zentriertem Community-Schriftzug im Markenkopf. Karten, Fensterstruktur und Renderpfad unverändert. Update-Benachrichtigung aus 0.2.11 bleibt erhalten.

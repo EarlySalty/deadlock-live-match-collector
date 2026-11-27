@@ -6,7 +6,7 @@ use crate::{
     window_layout::{
         centered, ink_baseline, scale, AUTO_BOUNDS, BRAND_BOUNDS, CAPTION_H, CARDS, CLIENT_H,
         CLIENT_W, CLOSE_BOUNDS, EDIT_BOUNDS, FOOT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
-        HEADING_BOUNDS, MINIMIZE_BOUNDS,
+        MINIMIZE_BOUNDS,
     },
     windows_paint::{Buffer, Canvas, Session},
     windows_vector::VectorFrame,
@@ -392,7 +392,6 @@ const SECTION: usize = 206;
 const BRAND: usize = 207;
 const SUBTLE: usize = 208;
 const CARD_LABEL: usize = 209;
-const HEADING: usize = 201;
 const BACKEND: usize = 202;
 const GAME: usize = 203;
 const FOOT: usize = 204;
@@ -613,11 +612,11 @@ unsafe extern "system" fn hover_subclass(
 }
 fn text_style(id: usize) -> (i32, i32, bool) {
     match id {
-        HEADING => (28, FW_SEMIBOLD as i32, false),
         BACKEND | GAME => (20, FW_SEMIBOLD as i32, true),
         SECTION | AUTO_LABEL => (17, FW_SEMIBOLD as i32, false),
         SAVE => (16, FW_SEMIBOLD as i32, false),
-        BRAND | FOOT | updates::CHECK => (14, FW_NORMAL as i32, false),
+        BRAND => (18, FW_SEMIBOLD as i32, false),
+        FOOT | updates::CHECK => (14, FW_NORMAL as i32, false),
         CAPTION_LABEL => (13, FW_NORMAL as i32, false),
         STATUS_LABEL | CARD_LABEL | AUTO_HINT => (15, FW_NORMAL as i32, false),
         SUBTLE => (15, FW_NORMAL as i32, true),
@@ -818,7 +817,7 @@ unsafe fn draw_static(item: &DRAWITEMSTRUCT) {
     let dpi = window_dpi(item.hwndItem);
     let bg = if id == FOOT {
         FOOT_BG
-    } else if matches!(id, HEADING | BRAND) {
+    } else if id == BRAND {
         BG
     } else if matches!(id, BACKEND | GAME | STATUS_LABEL) {
         STATUS_CARD
@@ -1307,7 +1306,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 FIELD
             } else if id == FOOT {
                 FOOT_BG
-            } else if matches!(id, HEADING | BRAND) {
+            } else if id == BRAND {
                 BG
             } else if matches!(id, BACKEND | GAME | STATUS_LABEL) {
                 STATUS_CARD
@@ -1667,7 +1666,6 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     // Caption text is painted by the parent (so this area remains draggable).
     let minimize = button("Minimieren", MINIMIZE, MINIMIZE_BOUNDS);
     let close = button("Schließen (Infobereich)", CLOSE_WINDOW, CLOSE_BOUNDS);
-    let heading = label("Deadlock Live Collector", HEADING, HEADING_BOUNDS);
     let brand = label("DEUTSCHE DEADLOCK COMMUNITY", BRAND, BRAND_BOUNDS);
     let backend_label = label("Backend", STATUS_LABEL, (80, 150, 190, 24));
     let game_label = label("Deadlock", STATUS_LABEL, (378, 150, 190, 24));
@@ -1709,7 +1707,6 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     if [
         minimize,
         close,
-        heading,
         brand,
         backend_label,
         game_label,
