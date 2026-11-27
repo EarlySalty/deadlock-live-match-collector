@@ -289,6 +289,22 @@ mod tests {
         assert!(select(list(), &v("2.0.0"), true).is_none());
     }
     #[test]
+    fn public_v030_prerelease_requires_opt_in_and_uploaded_exe() {
+        let candidate = || vec![release("v0.3.0", false, true)];
+        assert!(select(candidate(), &v("0.2.12"), false).is_none());
+        let update = select(candidate(), &v("0.2.12"), true).unwrap();
+        assert_eq!(update.tag, "v0.3.0");
+        assert_eq!(
+            update.url,
+            "https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0"
+        );
+        assert!(select(candidate(), &v("0.3.0"), true).is_none());
+        assert!(select(vec![release("v0.3.0", true, true)], &v("0.2.12"), true).is_none());
+        let mut missing = release("v0.3.0", false, true);
+        missing.assets.clear();
+        assert!(select(vec![missing], &v("0.2.12"), true).is_none());
+    }
+    #[test]
     fn notes_and_notice_deduplication() {
         let u = select(vec![release("v1.0.0", false, false)], &v("0.2.9"), false).unwrap();
         assert_eq!(u.notes, "Original notes");

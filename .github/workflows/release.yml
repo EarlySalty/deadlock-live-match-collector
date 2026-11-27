@@ -115,13 +115,7 @@ jobs:
         env:
           VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
           VT_ALLOW_UPLOAD: ${{ inputs.submit_to_virustotal }}
-        run: |
-          result=0
-          python3 packaging/virustotal_report.py dist || result=$?
-          if [[ -f dist/virustotal-report.md ]]; then
-            cat dist/virustotal-report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit "$result"
+        run: bash packaging/scan-virustotal.sh dist
       - name: Retain text-only security evidence (including failures)
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
