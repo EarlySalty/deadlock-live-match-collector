@@ -11,7 +11,7 @@
 [![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4)](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-CE412B)](https://www.rust-lang.org/)
 
-[**Download**](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0) · [Setup guide (DE)](packaging/Anleitung-Direkt.txt) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
+[**Download**](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0) · [Setup guide (DE)](packaging/Anleitung-Direkt.txt) · [Roadmap](docs/ROADMAP.md) · [Security](SECURITY.md)
 
 </div>
 
@@ -62,9 +62,9 @@ The project is written in Rust. The source tree is independent of Deadlock Plus.
 
 | Resource | Contents |
 | --- | --- |
-| [Roadmap](ROADMAP.md) | Remaining work and production prerequisites |
+| [Roadmap](docs/ROADMAP.md) | Remaining work and production prerequisites |
 | [API contract](docs/contract/README.md) | API v3 / upload schema 3 and synthetic test vectors |
-| [Development history](docs/development-history.md) | Technical design, historical changes and validation plans |
+| [Development history](docs/archive/development-history.md) | Technical design, historical changes and validation plans |
 | [CI/CD](https://github.com/EarlySalty/deadlock-live-match-collector/actions) | Build, tests and release evidence |
 
 To run the local Rust checks with the pinned toolchain:

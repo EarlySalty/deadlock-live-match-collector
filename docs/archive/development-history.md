@@ -1,16 +1,16 @@
 # Development history and technical notes
 
-> Archived from the previous README (main at a6ddce5). This is a historical development record, not the current download or release status. For the public desktop preview, see the [current README](../README.md) and [v0.3.0 release](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0).
+> Archived from the previous README (main at a6ddce5). This is a historical development record, not the current download or release status. For the public desktop preview, see the [current README](../../README.md) and [v0.3.0 release](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0).
 
 Windows x64 desktop/tray application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. Current integration candidate: no authorized live source is available; the desktop client remains in standby and never uploads without an authorized source. The non-Windows development CLI still exits before credential input. The intended HTTPS transport is retained but inactive. The current source tree is independent of Deadlock Plus; no former reader, assets, or dependency are required. There is **no functioning live collector download** for this development state. Publicly readable source is not a grant of an open-source license; licensing of the collector code is pending an owner decision. Preserve third-party notices.
 
-[German direct setup instructions](../packaging/Anleitung-Direkt.txt) · [API v3 / upload schema 3](contract/README.md) · [Security](../SECURITY.md) · [Roadmap](../ROADMAP.md)
+[German direct setup instructions](../../packaging/Anleitung-Direkt.txt) · [API v3 / upload schema 3](../contract/README.md) · [Security](../../SECURITY.md) · [Roadmap](../ROADMAP.md)
 
 ## Live values
 
 The former game-process reader and its asset parser have been removed. The independent model is intended to represent the local hero, playing time, game mode and pause; K/D/A, own/enemy team souls, visible scoreboard and team statistics, own items and ability upgrades, visible structures and objective status/timers. Unknown values remain null or absent. Only directly observed game timers are represented as direct; bridge-buff estimates are separate and explicitly labelled. No names, Steam IDs, raw match ID, raw memory, positions or new hidden enemy data are sent.
 
-The v3 upload has schema_version=3, random per-process writer ID, monotonically increasing sequence and match epoch. Only an opaque source-provided volatile session token is used; real match IDs are not required. The complete encoded HTTPS JSON body is limited to 32768 bytes. Old upload schema 2 is rejected; no v2 fallback. See the [full synthetic payload](contract/live-match-api-v3-vectors.json) and [field definitions](contract/live-match-api-v3.schema.json).
+The v3 upload has schema_version=3, random per-process writer ID, monotonically increasing sequence and match epoch. Only an opaque source-provided volatile session token is used; real match IDs are not required. The complete encoded HTTPS JSON body is limited to 32768 bytes. Old upload schema 2 is rejected; no v2 fallback. See the [full synthetic payload](../contract/live-match-api-v3-vectors.json) and [field definitions](../contract/live-match-api-v3.schema.json).
 
 The channel key (dlm_ plus 64 ASCII hexadecimal characters) is entered into a masked Windows settings field and stored in the current user's Windows Credential Manager; it is sent in the Authorization header only. The desktop client runs in the notification area, checks for Deadlock every two seconds when idle, and supports optional opt-in HKCU Run autostart, credential removal and explicit exit. Never include it in a URL or issue report. A key is bound to a writer; rotate for a new process if required, not merely because of a long pause. Temporary failures use bounded backoff with new observations. Select Beenden in the Windows settings or tray menu to stop sending; closing the window hides it. Autostart is disabled separately. A 204 response is an acknowledgment, not proof of fresh game data.
 
@@ -26,7 +26,7 @@ The following is the intended test plan after a source is authorized. Currently 
 
 1. Verify matching schema/vector hashes. Run the Collector Rust checks and backend collector/router/bot-consumer tests.
 2. Test a full synthetic payload through the actual HTTP router and authorized bot consumer, check every intended game-value group, cross-channel denial, public allowlist and no telemetry persistence (including expiry, restart, rotation and concurrent requests).
-3. Build a Windows x64 test executable and record its SHA-256. Copy it into the authorized test environment. Run the setup in [Anleitung.txt](../packaging/Anleitung.txt).
+3. Build a Windows x64 test executable and record its SHA-256. Copy it into the authorized test environment. Run the setup in [Anleitung.txt](../../packaging/Anleitung.txt).
 4. Check Windows tray/settings, dummy-key Credential Manager roundtrip, duplicate-instance protection, optional autostart on/off and exit in an isolated test environment. Check actual game attach/detach, connection, drift/eligibility and pause/resume only after the actual rules and test environment are authorized. Verify the bot consumes the observed values, not synthetic ones masquerading as live measurements.
 
 A local unauthenticated routing/auth preflight for the matching endpoint uses the first synthetic vector; substitute the authorized HTTPS test base URL:
