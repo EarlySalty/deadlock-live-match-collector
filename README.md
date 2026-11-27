@@ -75,6 +75,8 @@ Eigene native Titelleiste, GDI+-geglättete Karten, Schrift und Linienicons; red
 
 Native GDI/ClearType-Schrift statt GDI+-Schriftrasterung; GDI+ zeichnet nur Formen und Icons. Gezeichnete Karten und Bedienelemente werden gepuffert und jeweils mit einem BitBlt präsentiert. Hover reagiert nur auf Eintritt/Austritt, ohne Animationstimer. Einheitliche Linienicons und gemessene gemeinsame Icon-Text-Gruppen; Titelleiste ohne DDC-Kürzel, Fußzeile im bisherigen Stil. Keine Änderung am Installer oder Backend.
 
-### UI-Korrektur 0.2.7
+### Rendering und Fensterrahmen 0.2.7
 
-Die bestätigte GDI+-Schriftrasterung aus 0.2.5 (AntiAliasGridFit ohne ClearType-Farbsäume) wird wieder verwendet. Der gepufferte Zeichenpfad und die Icons aus 0.2.6 bleiben erhalten; die Icon-Text-Breite wird mit GDI+ gemessen. Die beiden Statuspunkte entfallen, Statusmeldungen bleiben erhalten. Keine Änderung an Installation, Backend oder Hintergrundbetrieb.
+Direct2D und DirectWrite zeichnen die UI mit Graustufen-Antialiasing direkt in den physikalischen Pixelabmessungen des Fensters, ohne ClearType-Farbsäume. Die Fensterkomposition bleibt gepuffert; pro Zeichenfläche wird ein vollständiger Frame gerendert. GDI+/GDI bleiben ausschließlich als Fallback. Das Per-Monitor-V2-Manifest verhindert DPI-Bitmapvirtualisierung. Das Original-Community-PNG (192×192) wird für gängige DPI-Stufen mit Lanczos vorgefiltert, nicht aus einem kleinen ICO vergrößert. Statuspunkte entfallen; Statusmeldungen bleiben. Der Marken-Header integriert die Fenstersteuerung, die Fußzeile fasst Version und Aktionen zusammen. Die vorhandene Win32-Installation, native Passwortmaske und Hintergrundfunktion bleiben unverändert. Zusätzliche Microsoft-Windows-API-Bindings (Cargo windows 0.48) benötigen keine externen GUI-Laufzeiten.
+
+Logo-Rastervarianten können mit `python3 packaging/generate_logo_pixels.py` aus der bestehenden PNG-Datei und ImageMagick neu erzeugt werden.

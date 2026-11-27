@@ -22,6 +22,8 @@ mod windows_install;
 #[cfg(windows)]
 mod windows_paint;
 #[cfg(windows)]
+mod windows_vector;
+#[cfg(windows)]
 pub use windows_client::run_windows;
 pub mod telemetry;
 

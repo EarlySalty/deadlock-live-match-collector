@@ -4,6 +4,7 @@
 #define PRODUCT_NAME "DeadlockLiveMatchCollector"
 #endif
 COLLECTOR ICON "collector.ico"
+1 24 "collector.manifest"
 1 VERSIONINFO
  FILEVERSION VER_MAJOR,VER_MINOR,VER_PATCH,0
  PRODUCTVERSION VER_MAJOR,VER_MINOR,VER_PATCH,0

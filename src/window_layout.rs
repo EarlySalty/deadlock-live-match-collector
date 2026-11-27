@@ -1,12 +1,13 @@
 //! Pixel geometry shared by the native UI and platform-independent layout tests.
 pub(crate) type Bounds = (i32, i32, i32, i32);
 pub(crate) const CLIENT_W: i32 = 632;
-pub(crate) const CLIENT_H: i32 = 628;
-pub(crate) const CAPTION_H: i32 = 36;
-pub(crate) const HEADER_TOP: i32 = 51;
-pub(crate) const HEADER_BOTTOM: i32 = 114;
+pub(crate) const CLIENT_H: i32 = 648;
+pub(crate) const CAPTION_H: i32 = 112;
+pub(crate) const HEADER_TOP: i32 = 16;
+pub(crate) const HEADER_BOTTOM: i32 = 102;
 pub(crate) const EDIT_BOUNDS: Bounds = (40, 330, 552, 42);
 pub(crate) const AUTO_BOUNDS: Bounds = (536, 509, 56, 38);
+pub(crate) const FOOT_BOUNDS: Bounds = (24, 590, 584, 42);
 pub(crate) const CARDS: [Bounds; 4] = [
     (24, 130, 286, 118),
     (322, 130, 286, 118),
@@ -119,8 +120,12 @@ mod tests {
             ] {
                 assert!(contains(card, control));
             }
-            assert!(contains((0, 0, CLIENT_W, CAPTION_H), (588, 3, 40, 30)));
-            assert!(contains((0, 0, CLIENT_W, CLIENT_H), (488, 595, 120, 30)));
+            assert!(contains((0, 0, CLIENT_W, CAPTION_H), (572, 16, 36, 32)));
+            assert!(contains((0, 0, CLIENT_W, CLIENT_H), FOOT_BOUNDS));
+            for control in [(40, 596, 274, 30), (366, 596, 110, 30), (488, 596, 104, 30)] {
+                assert!(contains(FOOT_BOUNDS, control));
+            }
+            assert!(contains((0, 0, 532, CAPTION_H), (104, 26, 416, 40)));
         }
     }
 
@@ -128,7 +133,7 @@ mod tests {
     fn header_icon_and_edit_inner_bounds_stay_centered() {
         for dpi in [96, 120, 144, 168, 192, 240, 288] {
             for (top, bottom, size) in [
-                (HEADER_TOP, HEADER_BOTTOM, 54),
+                (HEADER_TOP, HEADER_BOTTOM, 64),
                 (EDIT_BOUNDS.1, EDIT_BOUNDS.1 + EDIT_BOUNDS.3, 20),
             ] {
                 let (a, b) = (scale(top, dpi), scale(bottom, dpi));

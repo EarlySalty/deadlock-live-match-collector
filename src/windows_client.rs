@@ -5,9 +5,10 @@ use crate::{
     secret,
     window_layout::{
         centered, ink_baseline, scale, AUTO_BOUNDS, CAPTION_H, CARDS, CLIENT_H, CLIENT_W,
-        EDIT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
+        EDIT_BOUNDS, FOOT_BOUNDS, HEADER_BOTTOM, HEADER_TOP,
     },
     windows_paint::{Buffer, Canvas, Session},
+    windows_vector::VectorFrame,
 };
 use std::{
     cell::RefCell,
@@ -332,7 +333,7 @@ fn control(
     bounds: (i32, i32, i32, i32),
 ) -> HWND {
     unsafe {
-        let dpi = GetDpiForWindow(parent).max(96);
+        let dpi = window_dpi(parent);
         let r = scaled_rect(bounds, dpi);
         let hwnd = CreateWindowExW(
             0,
@@ -369,7 +370,7 @@ const MUTED: u32 = 0xc8c3bb;
 const FIELD: u32 = 0x171514;
 const LINE: u32 = 0x3d3732;
 const TILE: u32 = 0x2b2927;
-const TITLE_LABEL: usize = 210;
+const FOOT_BG: u32 = 0x211f1d;
 const MINIMIZE: usize = 211;
 const CLOSE_WINDOW: usize = 212;
 const AUTO_LABEL: usize = 213;
@@ -419,6 +420,14 @@ fn font(id: usize, dpi: u32) -> HFONT {
         fonts.push((kind, dpi, h));
         h
     })
+}
+fn window_dpi(hwnd: HWND) -> u32 {
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi == 0 {
+        96
+    } else {
+        dpi
+    }
 }
 fn scaled_rect((x, y, w, h): (i32, i32, i32, i32), dpi: u32) -> RECT {
     RECT {
@@ -591,12 +600,12 @@ unsafe extern "system" fn hover_subclass(
 }
 fn text_style(id: usize) -> (i32, i32, bool) {
     match id {
-        HEADING => (30, FW_BOLD as i32, false),
-        BACKEND | GAME => (19, FW_BOLD as i32, true),
-        SECTION | AUTO_LABEL => (16, FW_BOLD as i32, false),
-        SAVE => (15, FW_BOLD as i32, false),
-        BRAND | TITLE_LABEL | FOOT | CARD_LABEL | AUTO_HINT => (13, FW_NORMAL as i32, false),
-        SUBTLE => (13, FW_NORMAL as i32, true),
+        HEADING => (28, FW_SEMIBOLD as i32, false),
+        BACKEND | GAME => (19, FW_SEMIBOLD as i32, true),
+        SECTION | AUTO_LABEL => (16, FW_SEMIBOLD as i32, false),
+        SAVE => (15, FW_SEMIBOLD as i32, false),
+        BRAND | FOOT | CARD_LABEL | AUTO_HINT => (14, FW_NORMAL as i32, false),
+        SUBTLE => (14, FW_NORMAL as i32, true),
         EDIT => (15, FW_NORMAL as i32, false),
         _ => (14, FW_NORMAL as i32, false),
     }
@@ -605,7 +614,7 @@ fn label_color(id: usize) -> u32 {
     match id {
         BACKEND | GAME => FG,
         BRAND => GOLD,
-        TITLE_LABEL | FOOT | SUBTLE | CARD_LABEL | AUTO_HINT => MUTED,
+        FOOT | SUBTLE | CARD_LABEL | AUTO_HINT => MUTED,
         _ => FG,
     }
 }
@@ -629,7 +638,7 @@ unsafe fn paint_label(
             r,
             fg,
             scale(size, dpi),
-            (weight >= FW_BOLD as i32, center, wrap),
+            (weight >= FW_SEMIBOLD as i32, center, wrap),
         ) {
             return;
         }
@@ -654,33 +663,155 @@ unsafe fn paint_label(
     DrawTextW(dc, label.as_ptr(), label.len() as i32, &mut r, flags);
     SelectObject(dc, old);
 }
+struct Surface<'a> {
+    dc: HDC,
+    vector: Option<&'a VectorFrame>,
+}
+impl Surface<'_> {
+    unsafe fn fill(&self, r: RECT, c: u32) {
+        if let Some(v) = self.vector {
+            v.fill(r, c);
+        } else {
+            fill(self.dc, r, c);
+        }
+    }
+    unsafe fn rounded(&self, r: RECT, c: u32, d: i32) {
+        if let Some(v) = self.vector {
+            v.rounded(r, c, d);
+        } else {
+            rounded(self.dc, r, c, d);
+        }
+    }
+    unsafe fn outlined(&self, r: RECT, c: u32, b: u32, d: i32, stroke: i32) {
+        if let Some(v) = self.vector {
+            v.rounded(r, b, d);
+            let inner = RECT {
+                left: r.left + stroke,
+                top: r.top + stroke,
+                right: r.right - stroke,
+                bottom: r.bottom - stroke,
+            };
+            v.rounded(inner, c, (d - 2 * stroke).max(1));
+        } else {
+            outlined(self.dc, r, c, b, d, stroke);
+        }
+    }
+    unsafe fn icon(&self, name: &str, r: RECT, c: u32) -> bool {
+        if let Some(v) = self.vector {
+            v.icon(name, r, c);
+            true
+        } else if let Some(canvas) = Canvas::new(self.dc) {
+            canvas.icon(name, r, c);
+            true
+        } else {
+            false
+        }
+    }
+    unsafe fn label(&self, id: usize, dpi: u32, label: &[u16], r: RECT, c: u32, center: bool) {
+        if let Some(v) = self.vector {
+            let (size, weight, wrap) = text_style(id);
+            v.text(label, r, c, scale(size, dpi), weight, (center, wrap));
+        } else {
+            paint_label(self.dc, id, dpi, label, r, c, center);
+        }
+    }
+    unsafe fn measure(&self, id: usize, dpi: u32, label: &[u16]) -> i32 {
+        let (size, weight, _) = text_style(id);
+        if let Some(v) = self.vector {
+            if let Some(width) = v.text_width(label, scale(size, dpi), weight) {
+                return width;
+            }
+            // Do not issue GDI calls into an active Direct2D surface.
+            return scale(size, dpi) * (label.len() as i32);
+        }
+        if let Some(width) = Canvas::new(self.dc).and_then(|canvas| {
+            canvas.text_width(label, scale(size, dpi), weight >= FW_SEMIBOLD as i32)
+        }) {
+            return width;
+        }
+        let old = SelectObject(self.dc, font(id, dpi));
+        let mut measured: SIZE = zeroed();
+        GetTextExtentPoint32W(self.dc, label.as_ptr(), label.len() as i32, &mut measured);
+        SelectObject(self.dc, old);
+        measured.cx + scale(2, dpi)
+    }
+    unsafe fn logo(&self, r: RECT) {
+        if let Some(v) = self.vector {
+            v.logo(r);
+            return;
+        }
+        let size = r.right - r.left;
+        let icon = LoadImageW(
+            GetModuleHandleW(null()),
+            wide("COLLECTOR").as_ptr(),
+            IMAGE_ICON,
+            size,
+            size,
+            LR_DEFAULTCOLOR,
+        );
+        if !icon.is_null() {
+            DrawIconEx(
+                self.dc,
+                r.left,
+                r.top,
+                icon as HICON,
+                size,
+                size,
+                0,
+                null_mut(),
+                DI_NORMAL,
+            );
+            DestroyIcon(icon as HICON);
+        }
+    }
+}
+fn render_surface(dc: HDC, r: RECT, mut draw: impl FnMut(&Surface<'_>)) {
+    if let Some(v) = VectorFrame::begin(dc, r) {
+        draw(&Surface {
+            dc,
+            vector: Some(&v),
+        });
+        if v.finish() {
+            return;
+        }
+    }
+    // Device lost or unsupported target: redraw the entire frame with the
+    // proven 0.2.5 grayscale fallback, never leave a partially drawn control.
+    draw(&Surface { dc, vector: None });
+}
+
 unsafe fn draw_static(item: &DRAWITEMSTRUCT) {
     let id = item.CtlID as usize;
-    let dpi = GetDpiForWindow(item.hwndItem).max(96);
-    let bg = if matches!(id, HEADING | BRAND | FOOT | TITLE_LABEL) {
+    let dpi = window_dpi(item.hwndItem);
+    let bg = if id == FOOT {
+        FOOT_BG
+    } else if matches!(id, HEADING | BRAND) {
         BG
     } else {
         CARD
     };
-    fill(item.hDC, item.rcItem, bg);
     let mut label = [0u16; 256];
     let n = GetWindowTextW(item.hwndItem, label.as_mut_ptr(), 256).max(0) as usize;
     let fg = label_color(id);
-    paint_label(item.hDC, id, dpi, &label[..n], item.rcItem, fg, false);
+    render_surface(item.hDC, item.rcItem, |surface| {
+        surface.fill(item.rcItem, bg);
+        surface.label(id, dpi, &label[..n], item.rcItem, fg, false);
+    });
 }
 unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     let id = item.CtlID as usize;
-    let dpi = GetDpiForWindow(item.hwndItem).max(96);
+    let dpi = window_dpi(item.hwndItem);
     let sc = |v| scale(v, dpi);
     let r = item.rcItem;
     let active = item.itemState & 1 != 0;
     let hover = hover_level(item.hwndItem);
-    let bg = if matches!(id, REPO | EXIT | MINIMIZE | CLOSE_WINDOW) {
+    let bg = if matches!(id, REPO | EXIT) {
+        FOOT_BG
+    } else if matches!(id, MINIMIZE | CLOSE_WINDOW) {
         BG
     } else {
         CARD
     };
-    fill(item.hDC, r, bg);
     let mut label = [0u16; 128];
     let n = GetWindowTextW(item.hwndItem, label.as_mut_ptr(), 128).max(0) as usize;
     let fg = if id == SAVE {
@@ -690,123 +821,112 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
     } else {
         FG
     };
-    if id == AUTO {
-        let state = String::from_utf16_lossy(&label[..n]);
-        let on = state.ends_with("EIN");
-        let off = state.ends_with("AUS");
-        let (top, bottom) = centered(r.top, r.bottom, sc(24));
-        let (left, right) = centered(r.left, r.right, sc(44));
-        rounded(
-            item.hDC,
-            RECT {
-                left,
-                top,
-                right,
-                bottom,
-            },
-            blend(
-                if on { GOLD } else { 0x514941 },
-                if on { 0x78b8de } else { 0x74665b },
-                hover,
-            ),
-            sc(24),
-        );
-        let diameter = sc(18);
-        let (t, b) = centered(r.top, r.bottom, diameter);
-        let x = if on {
-            right - sc(3) - diameter
-        } else {
-            left + sc(3)
-        };
-        rounded(
-            item.hDC,
-            RECT {
-                left: x,
-                top: t,
-                right: x + diameter,
-                bottom: b,
-            },
-            if on { BG } else { FG },
-            diameter,
-        );
-        if !on && !off {
-            let q = wide("?");
-            paint_label(
-                item.hDC,
-                id,
-                dpi,
-                &q[..1],
+    render_surface(item.hDC, r, |surface| {
+        surface.fill(r, bg);
+        if id == AUTO {
+            let state = String::from_utf16_lossy(&label[..n]);
+            let on = state.ends_with("EIN");
+            let off = state.ends_with("AUS");
+            let (top, bottom) = centered(r.top, r.bottom, sc(24));
+            let (left, right) = centered(r.left, r.right, sc(44));
+            surface.rounded(
+                RECT {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+                blend(
+                    if on { GOLD } else { 0x514941 },
+                    if on { 0x78b8de } else { 0x74665b },
+                    hover,
+                ),
+                sc(24),
+            );
+            let diameter = sc(18);
+            let (t, b) = centered(r.top, r.bottom, diameter);
+            let x = if on {
+                right - sc(3) - diameter
+            } else {
+                left + sc(3)
+            };
+            surface.rounded(
                 RECT {
                     left: x,
                     top: t,
                     right: x + diameter,
                     bottom: b,
                 },
-                BG,
-                true,
+                if on { BG } else { FG },
+                diameter,
             );
-        }
-    } else {
-        let base = if id == SAVE {
-            GOLD
-        } else if id == DASH {
-            0x302c29
+            if !on && !off {
+                let q = wide("?");
+                surface.label(
+                    id,
+                    dpi,
+                    &q[..1],
+                    RECT {
+                        left: x,
+                        top: t,
+                        right: x + diameter,
+                        bottom: b,
+                    },
+                    BG,
+                    true,
+                );
+            }
         } else {
-            bg
-        };
-        let hot = if id == SAVE {
-            0x6aafd5
-        } else if id == CLOSE_WINDOW {
-            0x494078
-        } else {
-            0x3c3531
-        };
-        let color = blend(base, hot, if active { 4 } else { hover });
-        rounded(item.hDC, r, color, sc(14));
-        let icon = match id {
-            SAVE => "link",
-            DASH => "external",
-            FORGET => "trash",
-            REPO => "repo",
-            EXIT => "power",
-            MINIMIZE => "minus",
-            CLOSE_WINDOW => "close",
-            _ => "",
-        };
-        let icon_size = sc(18);
-        let (top, bottom) = centered(r.top, r.bottom, icon_size);
-        let icon_only = matches!(id, MINIMIZE | CLOSE_WINDOW);
-        let (left, text_rect) = if icon_only {
-            (centered(r.left, r.right, icon_size).0, r)
-        } else {
-            let old = SelectObject(item.hDC, font(id, dpi));
-            let mut measured: SIZE = zeroed();
-            GetTextExtentPoint32W(item.hDC, label.as_ptr(), n as i32, &mut measured);
-            SelectObject(item.hDC, old);
-            let (size, weight, _) = text_style(id);
-            let measured_width = Canvas::new(item.hDC)
-                .and_then(|canvas| {
-                    canvas.text_width(&label[..n], scale(size, dpi), weight >= FW_BOLD as i32)
-                })
-                .unwrap_or(measured.cx + sc(2));
-            let (icon_left, text_left, text_right) = crate::window_layout::icon_label_group(
-                r.left + sc(8),
-                r.right - sc(8),
-                icon_size,
-                sc(8),
-                measured_width,
-            );
-            (
-                icon_left,
-                RECT {
-                    left: text_left,
-                    right: text_right,
-                    ..r
-                },
-            )
-        };
-        if let Some(canvas) = Canvas::new(item.hDC) {
-            canvas.icon(
+            let base = if id == SAVE {
+                GOLD
+            } else if id == DASH {
+                0x302c29
+            } else {
+                bg
+            };
+            let hot = if id == SAVE {
+                0x6aafd5
+            } else if id == CLOSE_WINDOW {
+                0x494078
+            } else {
+                0x3c3531
+            };
+            let color = blend(base, hot, if active { 4 } else { hover });
+            surface.rounded(r, color, sc(14));
+            let icon = match id {
+                SAVE => "link",
+                DASH => "external",
+                FORGET => "trash",
+                REPO => "repo",
+                EXIT => "power",
+                MINIMIZE => "minus",
+                CLOSE_WINDOW => "close",
+                _ => "",
+            };
+            let icon_size = sc(18);
+            let (top, bottom) = centered(r.top, r.bottom, icon_size);
+            let icon_only = matches!(id, MINIMIZE | CLOSE_WINDOW);
+            let (left, text_rect) = if icon_only {
+                (centered(r.left, r.right, icon_size).0, r)
+            } else {
+                let measured_width = surface.measure(id, dpi, &label[..n]);
+                let (icon_left, text_left, text_right) = crate::window_layout::icon_label_group(
+                    r.left + sc(8),
+                    r.right - sc(8),
+                    icon_size,
+                    sc(8),
+                    measured_width,
+                );
+                (
+                    icon_left,
+                    RECT {
+                        left: text_left,
+                        right: text_right,
+                        ..r
+                    },
+                )
+            };
+            if !surface.icon(
                 icon,
                 RECT {
                     left,
@@ -815,15 +935,16 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
                     bottom,
                 },
                 fg,
-            );
-        } else if icon_only {
-            let glyph = wide(if id == MINIMIZE { "−" } else { "×" });
-            paint_label(item.hDC, id, dpi, &glyph[..1], r, fg, true);
+            ) && icon_only
+            {
+                let glyph = wide(if id == MINIMIZE { "−" } else { "×" });
+                surface.label(id, dpi, &glyph[..1], r, fg, true);
+            }
+            if !icon_only {
+                surface.label(id, dpi, &label[..n], text_rect, fg, true);
+            }
         }
-        if !icon_only {
-            paint_label(item.hDC, id, dpi, &label[..n], text_rect, fg, true);
-        }
-    }
+    });
     if item.itemState & 0x10 != 0 {
         let mut focus = r;
         InflateRect(&mut focus, -sc(3), -sc(3));
@@ -990,8 +1111,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 y: ((l >> 16) as u16 as i16) as i32,
             };
             ScreenToClient(hwnd, &mut pt);
-            let dpi = GetDpiForWindow(hwnd).max(96);
-            if pt.y >= 0 && pt.y < scale(CAPTION_H, dpi) && pt.x >= 0 && pt.x < scale(540, dpi) {
+            let dpi = window_dpi(hwnd);
+            if pt.y >= 0
+                && pt.y < scale(CAPTION_H, dpi)
+                && pt.x >= 0
+                && (pt.x < scale(532, dpi) || pt.y >= scale(48, dpi))
+            {
                 HTCAPTION as LRESULT
             } else {
                 HTCLIENT as LRESULT
@@ -1002,74 +1127,45 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
             let target = BeginPaint(hwnd, &mut ps);
-            let dpi = GetDpiForWindow(hwnd).max(96);
+            let dpi = window_dpi(hwnd);
             let mut r: RECT = zeroed();
             GetClientRect(hwnd, &mut r);
             let buffer = Buffer::new(target, r);
             let dc = buffer.as_ref().map_or(target, Buffer::dc);
-            fill(dc, r, BG);
-            for bounds in CARDS {
-                rounded(dc, scaled_rect(bounds, dpi), CARD, scale(28, dpi));
-            }
-            fill(dc, scaled_rect((24, 36, 584, 1), dpi), LINE);
-            let title = wide("Deadlock Live Collector");
-            paint_label(
-                dc,
-                TITLE_LABEL,
-                dpi,
-                &title[..title.len() - 1],
-                scaled_rect((22, 2, 508, 32), dpi),
-                MUTED,
-                false,
-            );
-            fill(dc, scaled_rect((24, 590, 584, 1), dpi), LINE);
-            outlined(
-                dc,
-                scaled_rect(EDIT_BOUNDS, dpi),
-                FIELD,
-                LINE,
-                scale(16, dpi),
-                scale(1, dpi),
-            );
-            for (x, y, name) in [
-                (40, 146, "server"),
-                (338, 146, "game"),
-                (40, 278, "shield"),
-                (40, 508, "power"),
-            ] {
-                rounded(dc, scaled_rect((x, y, 32, 32), dpi), TILE, scale(12, dpi));
-                if let Some(canvas) = Canvas::new(dc) {
-                    canvas.icon(name, scaled_rect((x + 6, y + 6, 20, 20), dpi), GOLD);
+            render_surface(dc, r, |surface| {
+                surface.fill(r, BG);
+                for bounds in CARDS {
+                    surface.rounded(scaled_rect(bounds, dpi), CARD, scale(28, dpi));
                 }
-            }
-            if let Some(canvas) = Canvas::new(dc) {
-                canvas.icon("key", scaled_rect((52, 342, 18, 18), dpi), MUTED);
-            }
-            let icon_size = scale(54, dpi);
-            let (icon_top, _) =
-                centered(scale(HEADER_TOP, dpi), scale(HEADER_BOTTOM, dpi), icon_size);
-            let icon = LoadImageW(
-                GetModuleHandleW(null()),
-                wide("COLLECTOR").as_ptr(),
-                IMAGE_ICON,
-                icon_size,
-                icon_size,
-                LR_DEFAULTCOLOR,
-            );
-            if !icon.is_null() {
-                DrawIconEx(
-                    dc,
-                    scale(24, dpi),
-                    icon_top,
-                    icon as HICON,
-                    icon_size,
-                    icon_size,
-                    0,
-                    null_mut(),
-                    DI_NORMAL,
+                surface.rounded(scaled_rect(FOOT_BOUNDS, dpi), FOOT_BG, scale(20, dpi));
+                surface.outlined(
+                    scaled_rect(EDIT_BOUNDS, dpi),
+                    FIELD,
+                    LINE,
+                    scale(16, dpi),
+                    scale(1, dpi),
                 );
-                DestroyIcon(icon as HICON);
-            }
+                for (x, y, name) in [
+                    (40, 146, "server"),
+                    (338, 146, "game"),
+                    (40, 278, "shield"),
+                    (40, 508, "power"),
+                ] {
+                    surface.rounded(scaled_rect((x, y, 32, 32), dpi), TILE, scale(12, dpi));
+                    surface.icon(name, scaled_rect((x + 5, y + 5, 22, 22), dpi), GOLD);
+                }
+                surface.icon("key", scaled_rect((52, 342, 18, 18), dpi), MUTED);
+                let size = scale(64, dpi);
+                let (top, bottom) =
+                    centered(scale(HEADER_TOP, dpi), scale(HEADER_BOTTOM, dpi), size);
+                let left = scale(24, dpi);
+                surface.logo(RECT {
+                    left,
+                    top,
+                    right: left + size,
+                    bottom,
+                });
+            });
             if let Some(b) = buffer {
                 b.present(target, r);
             }
@@ -1081,7 +1177,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             let id = GetDlgCtrlID(l as HWND) as usize;
             let bg = if id == EDIT {
                 FIELD
-            } else if matches!(id, HEADING | FOOT | BRAND | TITLE_LABEL) {
+            } else if matches!(id, HEADING | FOOT | BRAND) {
                 BG
             } else {
                 CARD
@@ -1383,7 +1479,7 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     if hwnd.is_null() {
         return Err("Statusfenster konnte nicht erstellt werden.");
     }
-    let dpi = GetDpiForWindow(hwnd).max(96);
+    let dpi = window_dpi(hwnd);
     SetWindowPos(
         hwnd,
         null_mut(),
@@ -1423,10 +1519,10 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
         child
     };
     // Caption text is painted by the parent (so this area remains draggable).
-    let minimize = button("Minimieren", MINIMIZE, (544, 3, 40, 30));
-    let close = button("Schließen (Infobereich)", CLOSE_WINDOW, (588, 3, 40, 30));
-    let heading = label("Live Collector", HEADING, (92, 53, 500, 38));
-    let brand = label("DEUTSCHE DEADLOCK COMMUNITY", BRAND, (94, 93, 498, 21));
+    let minimize = button("Minimieren", MINIMIZE, (532, 16, 36, 32));
+    let close = button("Schließen (Infobereich)", CLOSE_WINDOW, (572, 16, 36, 32));
+    let heading = label("Deadlock Live Collector", HEADING, (104, 26, 416, 40));
+    let brand = label("DEUTSCHE DEADLOCK COMMUNITY", BRAND, (106, 68, 414, 24));
     let backend_label = label("Backend", CARD_LABEL, (80, 150, 190, 24));
     let game_label = label("Deadlock", CARD_LABEL, (378, 150, 190, 24));
     let status = label("Verbindung wird hergestellt …", BACKEND, (40, 184, 254, 46));
@@ -1456,10 +1552,10 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     let version = label(
         concat!("Version ", env!("CARGO_PKG_VERSION"), " · Windows x64"),
         FOOT,
-        (24, 595, 266, 30),
+        (40, 596, 274, 30),
     );
-    let repo = button("GitHub", REPO, (366, 595, 110, 30));
-    let exit = button("Beenden", EXIT, (488, 595, 120, 30));
+    let repo = button("GitHub", REPO, (366, 596, 110, 30));
+    let exit = button("Beenden", EXIT, (488, 596, 104, 30));
     if [
         minimize,
         close,
