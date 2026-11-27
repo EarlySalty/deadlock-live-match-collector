@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Read-only final gate for a future approved protected publishing job.
-# Does not create, edit or publish a release. The current workflow stays blocked.
+# Read-only final gate for the separately authorized protected publishing job.
+# Does not create, edit or publish a release.
 set -euo pipefail
 archive=${1:?ZIP required}
 : "${RELEASE_TAG:?Release tag required}"
@@ -22,7 +22,7 @@ case "$RELEASE_MODE" in
 esac
 python3 packaging/release_checks.py tag
 python3 packaging/release_checks.py ci
-# The future publisher must check this immediately before mutation, use the
+# The protected publisher must check this immediately before mutation, use the
 # verified release ID (not a new tag lookup), and enforce exclusive asset/tag
 # mutation rights. The API check is not an atomic compare-and-publish.
 python3 packaging/verify_draft.py "$archive"

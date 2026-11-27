@@ -20,7 +20,7 @@ Full values are restricted to the authorized bot consumer and the owning partner
 
 ## Internal function test
 
-The following is the intended test plan after a source is authorized. Currently only synthetic model/transport tests and isolated backend tests are applicable; the Windows executable stays in standby without uploads; only the non-Windows CLI retains the source-blocked exit. No public release or production deployment is authorized.
+The following is the intended test plan after a source is authorized. Currently only synthetic model/transport tests and isolated backend tests are applicable; the Windows executable stays in standby without uploads; only the non-Windows CLI retains the source-blocked exit. A public desktop preview requires separate exact-version release authorization; no production deployment or real-match use is authorized.
 
 1. Verify matching schema/vector hashes. Run the Collector Rust checks and backend collector/router/bot-consumer tests.
 2. Test a full synthetic payload through the actual HTTP router and authorized bot consumer, check every intended game-value group, cross-channel denial, public allowlist and no telemetry persistence (including expiry, restart, rotation and concurrent requests).

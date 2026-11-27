@@ -38,6 +38,6 @@ gh release create "$RELEASE_TAG" --draft --verify-tag "${release_flags[@]}" --ti
   --notes-file "$notes" "$archive" dist/SHA256SUMS \
   dist/live-match-collector.exe dist/SHA256SUMS.exe \
   dist/clamav-report.txt dist/build-environment.txt "${report_assets[@]}"
-# Verify the uploaded draft, including all remote asset digests. A future protected
-# publisher must repeat this check immediately before publishing by this release ID.
+# Verify the uploaded draft, including all remote asset digests. The protected
+# publisher repeats this check immediately before publishing by this release ID.
 python3 packaging/verify_draft.py "$archive"
