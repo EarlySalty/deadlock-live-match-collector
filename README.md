@@ -7,15 +7,21 @@
 **A native Windows desktop companion for the Deutsche Deadlock Community Twitch integration.**
 
 [![CI/CD](https://github.com/EarlySalty/deadlock-live-match-collector/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/EarlySalty/deadlock-live-match-collector/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/EarlySalty/deadlock-live-match-collector?include_prereleases&sort=semver&label=release)](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
-[![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4)](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0)
+[![Published version (including previews)](https://img.shields.io/github/v/release/EarlySalty/deadlock-live-match-collector?include_prereleases&sort=semver&label=version&color=8957e5)](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
+[![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4)](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-CE412B)](https://www.rust-lang.org/)
 
-[**Download**](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0) · [Setup guide (DE)](packaging/Anleitung-Direkt.txt) · [Roadmap](docs/ROADMAP.md) · [Security](SECURITY.md)
+[**All releases & downloads**](https://github.com/EarlySalty/deadlock-live-match-collector/releases) · [Setup guide (DE)](packaging/Anleitung-Direkt.txt) · [Roadmap](docs/ROADMAP.md) · [Security](SECURITY.md)
 
 </div>
 
 ## Download
+
+[**Browse all published releases, including pre-releases →**](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
+
+The version badge above shows the published version number and updates automatically, including pre-releases.
+
+### v0.3.0 desktop preview
 
 | Windows x64 | Description |
 | --- | --- |
@@ -38,7 +44,7 @@
 
 ## Getting started
 
-1. Download the EXE or ZIP from the [official release](https://github.com/EarlySalty/deadlock-live-match-collector/releases/tag/v0.3.0).
+1. Choose the desired published version from [Releases](https://github.com/EarlySalty/deadlock-live-match-collector/releases). The checksum links below refer specifically to v0.3.0.
 2. Verify the executable's SHA-256 against [SHA256SUMS.exe](https://github.com/EarlySalty/deadlock-live-match-collector/releases/download/v0.3.0/SHA256SUMS.exe). For the ZIP, use [SHA256SUMS](https://github.com/EarlySalty/deadlock-live-match-collector/releases/download/v0.3.0/SHA256SUMS).
 3. Follow the [German setup guide](packaging/Anleitung-Direkt.txt) for isolated desktop evaluation.
 4. Use the tray menu to reopen the window or exit. Autostart is optional.
