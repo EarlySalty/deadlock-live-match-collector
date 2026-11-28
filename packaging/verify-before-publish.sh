@@ -11,7 +11,7 @@ bash packaging/verify-package.sh "$archive"
 python3 packaging/virustotal_report.py dist --verify
 python3 packaging/dependency_evidence.py dist --verify
 python3 packaging/release_assets.py verify "$archive"
-for subject in "$archive" dist/live-match-collector.exe dist/cargo-sbom.cdx.json dist/security-evidence.zip; do
+for subject in "$archive" dist/live-match-collector.exe dist/cargo-sbom.cdx.json; do
   gh attestation verify "$subject" --repo "$GITHUB_REPOSITORY" \
     --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
     --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners

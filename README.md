@@ -90,4 +90,4 @@ For bug reports, include the version, Windows version and relevant non-sensitive
 
 ## Licensing
 
-The source is publicly visible; no open-source license has been granted for the collector's own code. Third-party notices accompany the ZIP. See [Security](SECURITY.md) for distribution and usage limits.
+The source is publicly visible; no open-source license has been granted for the collector's own code. Third-party notices accompany historical ZIP releases; future EXE-only releases link the matching notices archive in tagged source. See [Security](SECURITY.md) for distribution and usage limits.

@@ -1,5 +1,7 @@
 import hashlib
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
+import re
 import sys
 import zipfile
 
@@ -9,6 +11,7 @@ EVIDENCE = (
     "clamav-report.txt", "virustotal-report.json", "virustotal-report.md",
     "audit-status.txt", "reproducibility.txt", "pe-evidence.txt",
 )
+NOTICES = Path(__file__).resolve().parent / "third-party-notices.zip"
 
 
 def checked_file(path):
@@ -17,54 +20,83 @@ def checked_file(path):
     return path
 
 
-def download_files(archive, dist):
-    files = [Path(archive), dist / "live-match-collector.exe", dist / "security-evidence.zip"]
-    if len({path.name for path in files}) != len(files):
-        raise ValueError("Ambiguous download filenames")
-    return [checked_file(path) for path in files]
+def sha256(path):
+    with checked_file(path).open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
-def checksum_bytes(files):
-    lines = []
-    for path in files:
-        with path.open("rb") as handle:
-            digest = hashlib.file_digest(handle, "sha256").hexdigest()
-        lines.append(f"{digest}  {path.name}\n")
-    return "".join(lines).encode("ascii")
+def notice_contents(path, package=False):
+    entries = {}
+    with zipfile.ZipFile(checked_file(path)) as archive:
+        for entry in archive.infolist():
+            name = entry.filename.removeprefix("./")
+            if entry.is_dir():
+                continue
+            if package and not name.startswith("Lizenzen/"):
+                continue
+            if (not name.startswith("Lizenzen/") or ".." in PurePosixPath(name).parts
+                    or name in entries):
+                raise ValueError("Invalid or duplicate third-party notice")
+            entries[name] = hashlib.sha256(archive.read(entry)).hexdigest()
+    if not entries:
+        raise ValueError("Missing third-party notices")
+    return entries
 
 
-def build_assets(archive, dist=Path("dist")):
-    sources = [checked_file(dist / name) for name in EVIDENCE]
-    bundle = dist / "security-evidence.zip"
-    with zipfile.ZipFile(bundle, "x", compression=zipfile.ZIP_DEFLATED) as output:
-        for source in sources:
-            output.write(source, source.name)
-    public = dist / "public"
-    public.mkdir(exist_ok=True)
-    with (public / "SHA256SUMS").open("xb") as output:
-        output.write(checksum_bytes(download_files(archive, dist)))
-    return verify_assets(archive, dist)
+def verify_notices(archive, notices=NOTICES):
+    if notice_contents(Path(archive), package=True) != notice_contents(notices):
+        raise ValueError("Tagged third-party notices differ from the Windows package")
 
 
-def verify_assets(archive, dist=Path("dist")):
-    files = download_files(archive, dist)
-    with zipfile.ZipFile(files[2]) as bundle:
-        if sorted(bundle.namelist()) != sorted(EVIDENCE):
-            raise ValueError("Missing, duplicate or unexpected evidence files")
-        for name in EVIDENCE:
-            if bundle.read(name) != checked_file(dist / name).read_bytes():
-                raise ValueError(f"Evidence mismatch: {name}")
-    sums = checked_file(dist / "public" / "SHA256SUMS")
-    if sums.read_bytes() != checksum_bytes(files):
-        raise ValueError("Public checksum mismatch")
-    return [*files, sums]
+def verify_assets(archive, dist=Path("dist"), notices=NOTICES):
+    archive = checked_file(Path(archive))
+    exe = checked_file(dist / "live-match-collector.exe")
+    for name in EVIDENCE:
+        checked_file(dist / name)
+    for path, checksum in ((archive, "SHA256SUMS"), (exe, "SHA256SUMS.exe")):
+        if (dist / checksum).read_text().split() != [sha256(path), path.name]:
+            raise ValueError("Release checksum mismatch")
+    verify_notices(archive, notices)
+    return [exe]
+
+
+def download_notes(archive, repo, tag, run, artifact, dist=Path("dist"), notices=NOTICES):
+    if (repo != "EarlySalty/deadlock-live-match-collector"
+            or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)
+            or not re.fullmatch(r"[1-9][0-9]*", run)
+            or not re.fullmatch(r"[1-9][0-9]*", artifact)):
+        raise ValueError("Invalid release or evidence coordinates")
+    exe, = verify_assets(archive, dist, notices)
+    base = f"https://github.com/{repo}"
+    source = f"{base}/blob/{tag}"
+    return (
+        "## Download\n\n"
+        f"**[Download for Windows (EXE)]({base}/releases/download/{tag}/{exe.name})**\n\n"
+        f"[Setup guide (DE)]({source}/packaging/Anleitung-Direkt.md) · "
+        f"[Third-party notices]({source}/packaging/third-party-notices.zip)\n\n"
+        "<details>\n<summary>Security and verification</summary>\n\n"
+        f"SHA-256 (Windows EXE): `{sha256(exe)}`\n\n"
+        f"[Build and scan evidence]({base}/actions/runs/{run}/artifacts/{artifact}) "
+        f"(retained for 90 days; GitHub sign-in may be required) · "
+        f"[Release workflow]({base}/actions/runs/{run}) · "
+        f"[Security policy]({source}/docs/release-security.md) · "
+        f"[VirusTotal report](https://www.virustotal.com/gui/file/{sha256(exe)})\n\n"
+        f"Verify build provenance: `gh attestation verify {exe.name} --repo {repo}`\n\n"
+        "</details>\n\n"
+    )
 
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 3 or sys.argv[1] not in ("build", "verify"):
-            raise ValueError("Expected build or verify and package path")
-        action = build_assets if sys.argv[1] == "build" else verify_assets
-        action(sys.argv[2])
-    except (ValueError, OSError, zipfile.BadZipFile, RuntimeError) as error:
+        if len(sys.argv) != 3 or sys.argv[1] not in ("verify", "notes", "notices"):
+            raise ValueError("Expected verify, notes or notices and package path")
+        if sys.argv[1] == "verify":
+            verify_assets(sys.argv[2])
+        elif sys.argv[1] == "notices":
+            verify_notices(sys.argv[2])
+        else:
+            print(download_notes(sys.argv[2], *(os.environ[k] for k in (
+                "GITHUB_REPOSITORY", "RELEASE_TAG", "GITHUB_RUN_ID", "RELEASE_EVIDENCE_ARTIFACT_ID"
+            ))), end="")
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile, RuntimeError) as error:
         sys.exit(f"Release asset verification failed: {error}")

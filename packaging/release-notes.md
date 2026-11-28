@@ -16,9 +16,9 @@ Windows sign-in autostart now stays in the notification area even when no connec
 
 ## Getting started
 
-1. Download `live-match-collector.exe` or the ZIP package with setup instructions and third-party notices.
-2. Compare the SHA-256 of your download with the corresponding checksum file before opening it.
-3. Follow the included setup instructions. This preview is for isolated evaluation only; do not use a real connection key.
+1. Download `live-match-collector.exe`.
+2. Compare its SHA-256 with the value in the security and verification section before opening it.
+3. Follow the linked setup instructions. This preview is for isolated evaluation only; do not use a real connection key.
 4. Close the window to keep the application in the tray, or choose Exit to stop it. Autostart is optional.
 
 To opt into public pre-release notifications, set `DEADLOCK_COLLECTOR_PUBLIC_TEST_CHANNEL=1` in the process environment before starting the collector. The default channel excludes pre-releases.
@@ -29,4 +29,4 @@ To opt into public pre-release notifications, set `DEADLOCK_COLLECTOR_PUBLIC_TES
 - Native Windows end-to-end acceptance and production backend validation are pending.
 - The executable is unsigned. Do not disable security software or ignore specific antivirus warnings.
 
-The full ZIP includes third-party notices. SHA256SUMS covers the EXE, Windows ZIP and security-evidence.zip. The evidence ZIP contains the exact executable's VirusTotal report, ClamAV report, SBOM, build and reproducibility evidence and original checksums.
+Third-party notices are linked from the tagged source. The internal Windows ZIP remains a build and verification input; it is not a public release asset. Full build and scan evidence is linked above (90-day Actions artifact retention).
