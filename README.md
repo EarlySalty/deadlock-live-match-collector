@@ -11,7 +11,7 @@
 [![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4)](https://github.com/EarlySalty/deadlock-live-match-collector/releases)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-CE412B)](https://www.rust-lang.org/)
 
-[**All releases & downloads**](https://github.com/EarlySalty/deadlock-live-match-collector/releases) · [Setup guide (DE)](packaging/Anleitung-Direkt.txt) · [Roadmap](docs/ROADMAP.md) · [Security](SECURITY.md)
+[**All releases & downloads**](https://github.com/EarlySalty/deadlock-live-match-collector/releases) · [Setup guide (DE)](packaging/Anleitung-Direkt.md) · [Roadmap](docs/ROADMAP.md) · [Security](SECURITY.md)
 
 </div>
 
@@ -46,7 +46,7 @@ The version badge above shows the published version number and updates automatic
 
 1. Choose the desired published version from [Releases](https://github.com/EarlySalty/deadlock-live-match-collector/releases). The checksum links below refer specifically to v0.3.0.
 2. Verify the executable's SHA-256 against [SHA256SUMS.exe](https://github.com/EarlySalty/deadlock-live-match-collector/releases/download/v0.3.0/SHA256SUMS.exe). For the ZIP, use [SHA256SUMS](https://github.com/EarlySalty/deadlock-live-match-collector/releases/download/v0.3.0/SHA256SUMS).
-3. Follow the [German setup guide](packaging/Anleitung-Direkt.txt) for isolated desktop evaluation.
+3. Follow the [German setup guide](packaging/Anleitung-Direkt.md) for isolated desktop evaluation.
 4. Use the tray menu to reopen the window or exit. Autostart is optional.
 
 Updates are notification-only: no automatic download, installation or execution. Public pre-release notifications are opt-in; see the release notes for the test-channel setting.

@@ -42,8 +42,8 @@ class PolicyTests(unittest.TestCase):
     def test_exact_remote_main_and_version(self):
         for head, remote, version, success in (
             (self.sha, self.sha+"\trefs/heads/main", "0.3.1", True),
-            ("b"*40, self.sha+"\trefs/heads/main", "0.3.0", False),
-            (self.sha, "b"*40+"\trefs/heads/main", "0.3.0", False),
+            ("b"*40, self.sha+"\trefs/heads/main", "0.3.1", False),
+            (self.sha, "b"*40+"\trefs/heads/main", "0.3.1", False),
             (self.sha, self.sha+"\trefs/heads/main", "0.3.0", False)):
             with self.subTest(success=success, version=version), patch.dict("os.environ", self.env), \
                     patch("release_checks.subprocess.check_output", side_effect=[head, remote]), \
