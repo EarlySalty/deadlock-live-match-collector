@@ -11,7 +11,7 @@ class PolicyTests(unittest.TestCase):
         self.repo = "EarlySalty/deadlock-live-match-collector"
         self.env = dict(GITHUB_REPOSITORY=self.repo, GITHUB_REF="refs/heads/main",
                         GITHUB_EVENT_NAME="workflow_run", RELEASE_MODE="prerelease",
-                        RELEASE_TAG="v0.3.0", GITHUB_SHA=self.sha, RELEASE_PREVIEW_ENABLED="true")
+                        RELEASE_TAG="v0.3.1", RELEASE_PREVIEW_TAG="v0.3.1", GITHUB_SHA=self.sha, RELEASE_PREVIEW_ENABLED="true")
         self.event = dict(action="completed", workflow_run=dict(event="push", conclusion="success",
                           head_branch="main", head_sha=self.sha, head_repository={"full_name": self.repo},
                           path=".github/workflows/ci.yml"))
@@ -20,7 +20,7 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(allowed(self.env, self.event))
         for k, v in (("GITHUB_REPOSITORY", "fork/repo"), ("GITHUB_REF", "refs/heads/feature"),
                      ("GITHUB_EVENT_NAME", "push"), ("RELEASE_MODE", "stable"),
-                     ("RELEASE_TAG", "v0.3.1"), ("GITHUB_SHA", "b"*40), ("RELEASE_PREVIEW_ENABLED", "false")):
+                     ("RELEASE_TAG", "v0.3.2"), ("RELEASE_PREVIEW_TAG", "v0.3.0"), ("GITHUB_SHA", "b"*40), ("RELEASE_PREVIEW_ENABLED", "false")):
             with self.subTest(key=k):
                 self.assertFalse(allowed(dict(self.env, **{k:v}), self.event))
         for key in self.env:
@@ -41,10 +41,10 @@ class PolicyTests(unittest.TestCase):
 
     def test_exact_remote_main_and_version(self):
         for head, remote, version, success in (
-            (self.sha, self.sha+"\trefs/heads/main", "0.3.0", True),
+            (self.sha, self.sha+"\trefs/heads/main", "0.3.1", True),
             ("b"*40, self.sha+"\trefs/heads/main", "0.3.0", False),
             (self.sha, "b"*40+"\trefs/heads/main", "0.3.0", False),
-            (self.sha, self.sha+"\trefs/heads/main", "0.3.1", False)):
+            (self.sha, self.sha+"\trefs/heads/main", "0.3.0", False)):
             with self.subTest(success=success, version=version), patch.dict("os.environ", self.env), \
                     patch("release_checks.subprocess.check_output", side_effect=[head, remote]), \
                     patch("release_checks.command_json", return_value={"packages":[{"name":"live-match-collector","version":version}]}):

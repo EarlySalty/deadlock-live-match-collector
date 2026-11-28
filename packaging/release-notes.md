@@ -1,6 +1,10 @@
-# Deadlock Live Match Collector v0.3.0 — Preview
+# Deadlock Live Match Collector v0.3.1 — Preview
 
 This Windows x64 pre-release is intended for evaluating the desktop client. It is not a functional live-match integration.
+
+## Bug fix
+
+Windows sign-in autostart now stays in the notification area even when no connection key is saved. Manual launches still open the main window. No changes to live-data access or backend integration.
 
 ## What's included
 

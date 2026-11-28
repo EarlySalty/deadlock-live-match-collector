@@ -1,4 +1,4 @@
-"""Owner-authorized v0.3.0 preview only; stable source gate stays closed."""
+"""Version-scoped v0.3.1 preview only; stable source gate stays closed."""
 import json
 import os
 import re
@@ -11,7 +11,8 @@ def allowed(env, event):
     if not (repo == "EarlySalty/deadlock-live-match-collector"
             and env.get("GITHUB_REF") == "refs/heads/main"
             and env.get("RELEASE_MODE") == "prerelease"
-            and env.get("RELEASE_TAG") == "v0.3.0"
+            and env.get("RELEASE_TAG") == "v0.3.1"
+            and env.get("RELEASE_PREVIEW_TAG") == "v0.3.1"
             and bool(re.fullmatch(r"[a-f0-9]{40}", sha))
             and env.get("RELEASE_PREVIEW_ENABLED") == "true"):
         return False
