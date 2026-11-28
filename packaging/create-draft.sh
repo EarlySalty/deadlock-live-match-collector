@@ -8,6 +8,7 @@ archive=${1:?ZIP required}
 bash packaging/verify-package.sh "$archive"
 python3 packaging/virustotal_report.py dist --verify
 python3 packaging/dependency_evidence.py dist --verify
+python3 packaging/release_assets.py verify "$archive"
 gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
   --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
   --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
@@ -22,10 +23,8 @@ python3 packaging/release_checks.py ci
 release_flags=()
 notes=$(mktemp)
 trap 'rm -f "$notes"' EXIT
-cp packaging/release-notes.md "$notes"
-printf '\n' >> "$notes"
-cat dist/virustotal-report.md >> "$notes"
-report_assets=(dist/virustotal-report.md dist/virustotal-report.json dist/cargo-sbom.cdx.json dist/dependency-gate.json dist/Cargo.lock.sha256)
+python3 packaging/release_assets.py notes "$archive" > "$notes"
+cat packaging/release-notes.md >> "$notes"
 case "${RELEASE_MODE:-stable}" in
   stable) python3 packaging/release_checks.py preflight ;;
   prerelease)
@@ -35,9 +34,7 @@ case "${RELEASE_MODE:-stable}" in
   *) echo 'Invalid release mode' >&2; exit 2 ;;
 esac
 gh release create "$RELEASE_TAG" --draft --verify-tag "${release_flags[@]}" --title "$RELEASE_TAG" \
-  --notes-file "$notes" "$archive" dist/SHA256SUMS \
-  dist/live-match-collector.exe dist/SHA256SUMS.exe \
-  dist/clamav-report.txt dist/build-environment.txt "${report_assets[@]}"
+  --notes-file "$notes" dist/live-match-collector.exe
 # Verify the uploaded draft, including all remote asset digests. The protected
 # publisher repeats this check immediately before publishing by this release ID.
 python3 packaging/verify_draft.py "$archive"

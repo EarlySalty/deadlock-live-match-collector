@@ -7,16 +7,11 @@ import re
 import subprocess
 import sys
 
-ASSETS = (
-    "SHA256SUMS", "live-match-collector.exe", "SHA256SUMS.exe",
-    "clamav-report.txt", "build-environment.txt", "virustotal-report.md",
-    "virustotal-report.json", "cargo-sbom.cdx.json", "dependency-gate.json",
-    "Cargo.lock.sha256",
-)
+from release_assets import verify_assets
 
 
 def expected_assets(archive, dist=Path("dist")):
-    files = [Path(archive), *(dist / name for name in ASSETS)]
+    files = verify_assets(archive, dist)
     expected = {}
     for path in files:
         if path.name in expected or not path.is_file() or path.is_symlink():
