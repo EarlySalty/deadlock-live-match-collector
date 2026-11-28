@@ -12,7 +12,7 @@ out="$(pwd)/dist"
 profile=release
 suffix=""
 build_features=()
-guide=packaging/Anleitung-Direkt.txt
+guide=packaging/Anleitung-Direkt.md
 purpose=internal-function-test
 case "${1:-}" in
   "")
@@ -36,7 +36,7 @@ case "${1:-}" in
     out="$out/direct-test"
     source_sha=$(git rev-parse HEAD)
     suffix="-direct-${source_sha:0:12}"
-    guide=packaging/Anleitung-Direkt.txt
+    guide=packaging/Anleitung-Direkt.md
     purpose=authorized-direct-function-test
     if [[ -n "${CARGO_SLOT:-}" ]] || command -v cargo-slot >/dev/null; then
       profile=verify

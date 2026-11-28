@@ -1819,7 +1819,7 @@ unsafe fn desktop(startup: bool) -> Result<(), &'static str> {
     });
     SetTimer(hwnd, 1, 1000, None);
     updates::start();
-    if !startup || !configured {
+    if !startup {
         show(hwnd);
     }
     let mut msg: MSG = zeroed();

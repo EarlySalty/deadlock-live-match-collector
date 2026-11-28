@@ -4,7 +4,7 @@
 
 Windows x64 desktop/tray application intended to deliver complete live-game values to the Deutsche Deadlock Community Twitch bot. Current integration candidate: no authorized live source is available; the desktop client remains in standby and never uploads without an authorized source. The non-Windows development CLI still exits before credential input. The intended HTTPS transport is retained but inactive. The current source tree is independent of Deadlock Plus; no former reader, assets, or dependency are required. There is **no functioning live collector download** for this development state. Publicly readable source is not a grant of an open-source license; licensing of the collector code is pending an owner decision. Preserve third-party notices.
 
-[German direct setup instructions](../../packaging/Anleitung-Direkt.txt) · [API v3 / upload schema 3](../contract/README.md) · [Security](../../SECURITY.md) · [Roadmap](../ROADMAP.md)
+[German direct setup instructions](../../packaging/Anleitung-Direkt.md) · [API v3 / upload schema 3](../contract/README.md) · [Security](../../SECURITY.md) · [Roadmap](../ROADMAP.md)
 
 ## Live values
 

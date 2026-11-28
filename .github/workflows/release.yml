@@ -35,8 +35,9 @@ jobs:
       attestations: write
     env:
       RELEASE_MODE: prerelease
-      RELEASE_TAG: v0.3.0
+      RELEASE_TAG: v0.3.1
       RELEASE_PREVIEW_ENABLED: ${{ vars.RELEASE_PREVIEW_ENABLED }}
+      RELEASE_PREVIEW_TAG: ${{ vars.RELEASE_PREVIEW_TAG }}
       CLAMAV_IMAGE: ${{ vars.RELEASE_CLAMAV_IMAGE }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -126,7 +127,7 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            dist/live-match-collector-0.3.0-win64.zip
+            dist/live-match-collector-0.3.1-win64.zip
             dist/live-match-collector.exe
             dist/cargo-sbom.cdx.json
       - name: Create immutable tag after all checks
