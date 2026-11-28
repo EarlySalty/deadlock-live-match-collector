@@ -29,4 +29,4 @@ To opt into public pre-release notifications, set `DEADLOCK_COLLECTOR_PUBLIC_TES
 - Native Windows end-to-end acceptance and production backend validation are pending.
 - The executable is unsigned. Do not disable security software or ignore specific antivirus warnings.
 
-The full ZIP includes third-party notices. SHA-256 checksums and the exact executable's security report accompany the release when publication is authorized.
+The full ZIP includes third-party notices. SHA256SUMS covers the EXE, Windows ZIP and security-evidence.zip. The evidence ZIP contains the exact executable's VirusTotal report, ClamAV report, SBOM, build and reproducibility evidence and original checksums.

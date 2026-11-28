@@ -218,7 +218,7 @@ class DraftTests(unittest.TestCase):
                        RELEASE_TAG="v0.2.0", GITHUB_SHA=SHA, GITHUB_REPOSITORY=REPO,
                        MOCK_LOG=str(log), MOCK_FAIL="", RELEASE_MODE="stable")
             for fail in ("attestation verify", "release_checks.py tag", "release_checks.py ci",
-                         "release_checks.py preflight", "virustotal_report.py dist --verify", "dependency_evidence.py dist --verify", ""):
+                         "release_checks.py preflight", "virustotal_report.py dist --verify", "dependency_evidence.py dist --verify", "release_assets.py verify", ""):
                 with self.subTest(fail=fail):
                     log.write_text("")
                     result = subprocess.run(["bash", "packaging/create-draft.sh", str(archive)],
@@ -230,6 +230,9 @@ class DraftTests(unittest.TestCase):
                     else:
                         self.assertEqual(result.returncode, 0, result.stderr.decode())
                         self.assertIn("gh release create v0.2.0 --draft --verify-tag", calls)
+                        upload = calls.splitlines()[-2]
+                        self.assertTrue(upload.endswith("dist/public/SHA256SUMS dist/live-match-collector.exe dist/security-evidence.zip"))
+                        self.assertNotIn("dist/SHA256SUMS.exe", upload)
                         self.assertTrue(calls.splitlines()[-2].startswith("gh release create"))
                         self.assertTrue(calls.splitlines()[-1].startswith("python3 packaging/verify_draft.py"))
             log.write_text("")
@@ -252,7 +255,7 @@ class DraftTests(unittest.TestCase):
             log.write_text("")
             for fail in ("attestation verify", "release_checks.py tag", "release_checks.py ci",
                          "release_checks.py preflight", "virustotal_report.py dist --verify",
-                         "dependency_evidence.py dist --verify", "verify_draft.py", ""):
+                         "dependency_evidence.py dist --verify", "release_assets.py verify", "verify_draft.py", ""):
                 with self.subTest(prepublish_fail=fail):
                     log.write_text("")
                     result = subprocess.run(["bash", "packaging/verify-before-publish.sh", str(archive)],

@@ -128,7 +128,10 @@ jobs:
             dist/audit-status.txt
             dist/reproducibility.txt
             dist/pe-evidence.txt
-      - name: Attest exact verified ZIP, EXE and SBOM
+      - name: Bundle public release evidence
+        if: steps.scope.outputs.build == 'true'
+        run: python3 packaging/release_assets.py build "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
+      - name: Attest exact verified ZIP, EXE, SBOM and evidence bundle
         if: steps.scope.outputs.build == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -136,6 +139,7 @@ jobs:
             dist/live-match-collector-${{ steps.version.outputs.version }}-win64.zip
             dist/live-match-collector.exe
             dist/cargo-sbom.cdx.json
+            dist/security-evidence.zip
       - name: Create immutable tag after all checks
         if: steps.scope.outputs.build == 'true'
         env:
@@ -149,7 +153,8 @@ jobs:
           bash packaging/verify-package.sh "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
           python3 packaging/virustotal_report.py dist --verify
           python3 packaging/dependency_evidence.py dist --verify
-          for subject in "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip" dist/live-match-collector.exe dist/cargo-sbom.cdx.json; do
+          python3 packaging/release_assets.py verify "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip"
+          for subject in "dist/live-match-collector-${RELEASE_TAG#v}-win64.zip" dist/live-match-collector.exe dist/cargo-sbom.cdx.json dist/security-evidence.zip; do
             gh attestation verify "$subject" --repo "$GITHUB_REPOSITORY" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
               --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
