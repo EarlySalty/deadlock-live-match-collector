@@ -1,4 +1,4 @@
-# Deadlock Live Match Collector v0.3.1 — Preview
+# Deadlock Live Match Collector — Preview
 
 This Windows x64 pre-release is intended for evaluating the desktop client. It is not a functional live-match integration.
 
